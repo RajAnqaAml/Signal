@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\('app.py'\\).read\\(\\)\\); print\\('app.py: syntax OK'\\)\")",
+      "PowerShell(python -m pip install supabase python-dotenv 2>&1)"
+    ]
+  }
+}

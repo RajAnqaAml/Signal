@@ -1,0 +1,29 @@
+# Netlify hosts the static dashboard.
+# Build step generates frontend/config.js from environment variables so the
+# anon key + project URL are baked into the deploy without ever committing them.
+
+[build]
+  publish = "frontend"
+  command = """
+    printf 'window.SUPABASE_CONFIG = { url: \"%s\", anonKey: \"%s\" };' \
+      \"$PUBLIC_SUPABASE_URL\" \"$PUBLIC_SUPABASE_ANON_KEY\" > frontend/config.js
+  """
+
+# Note: set PUBLIC_SUPABASE_URL and PUBLIC_SUPABASE_ANON_KEY in
+# Netlify Site Settings -> Build & Deploy -> Environment Variables.
+# The anon key is safe to embed (Row Level Security restricts it to SELECT).
+
+[build.environment]
+  NODE_VERSION = "18"
+
+# Cache HTML for short window so updates propagate fast
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Static assets can be cached longer
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=300"

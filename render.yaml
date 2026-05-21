@@ -1,0 +1,17 @@
+services:
+  # Snapshot recorder: runs every 10 min during NSE market hours (Mon-Fri 09:15-15:30 IST).
+  # IST 09:15-15:30 = UTC 03:45-10:00. The cron starts every 10 min in hours 3-9 UTC.
+  - type: cron
+    name: signal-recorder
+    runtime: python
+    plan: starter            # Render Cron is on the starter plan ($1/month per cron)
+    schedule: "*/10 3-9 * * 1-5"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python recorder.py --once
+    envVars:
+      - key: SUPABASE_URL
+        sync: false           # set in Render dashboard, NOT in source
+      - key: SUPABASE_SERVICE_KEY
+        sync: false           # set in Render dashboard, NOT in source
+      - key: PYTHONIOENCODING
+        value: utf-8
