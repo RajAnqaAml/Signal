@@ -1,0 +1,64 @@
+name: NSE Signal Recorder
+
+# Runs every 10 min during NSE market hours (Mon-Fri 9:15-15:30 IST = 03:45-10:00 UTC).
+# Each invocation runs recorder.py --once which captures one snapshot, writes to
+# Supabase, and pushes ntfy notification on signal transitions.
+#
+# The cron range is slightly wider (03:00-10:00 UTC = 08:30-15:30 IST) so we
+# don't miss the opening tick. is_market_open() inside recorder skips writes
+# outside the actual 9:15-15:30 window.
+
+on:
+  schedule:
+    # GitHub Actions cron is UTC. Format: minute hour day-of-month month day-of-week
+    # */10 means every 10 minutes. 3-10 means hours 3,4,5,6,7,8,9,10. 1-5 = Mon-Fri.
+    - cron: '*/10 3-10 * * 1-5'
+
+  # Allow manual triggering from the Actions tab for testing.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force snapshot outside market hours (for testing)'
+        required: false
+        default: 'false'
+
+# Cancel an already-running instance if a new one is triggered.
+# Snapshots are idempotent in DB (UNIQUE on ts,symbol) so overlap is harmless,
+# but cancellation keeps the action minutes count down.
+concurrency:
+  group: recorder
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Take snapshot
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            echo "Force-mode: bypassing market-hours gate"
+            python recorder.py --once --force
+          else
+            python recorder.py --once
+          fi
