@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#FDF2F8">
+    <title>NIFTY · History</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: { extend: {
+                fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+                colors: {
+                    blush: { 50: '#FFF7FA', 100: '#FDF2F8', 200: '#FCE7F3', 300: '#FBCFE8', 400: '#F9A8D4', 500: '#EC4899', 600: '#DB2777', 700: '#BE185D' },
+                    ink: '#1F2937', muted: '#6B7280', emerald: '#10B981', amber: '#F59E0B', rose: '#EF4444',
+                },
+                animation: { 'fade-in': 'fadeIn 0.4s ease-out', 'shimmer': 'shimmer 1.6s linear infinite' },
+                keyframes: {
+                    fadeIn: { '0%': { opacity: 0, transform: 'translateY(6px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
+                    shimmer: { '0%': { backgroundPosition: '-400px 0' }, '100%': { backgroundPosition: '400px 0' } },
+                },
+            } },
+        };
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="config.js"></script>
+    <script src="common.js"></script>
+
+    <style>
+        body {
+            background:
+                radial-gradient(1200px 600px at 100% -20%, #FCE7F3 0%, transparent 60%),
+                radial-gradient(900px 500px at -10% 110%, #FBCFE8 0%, transparent 55%),
+                #FDF2F8;
+            min-height: 100dvh;
+            color: #1F2937;
+        }
+        .card {
+            background: white; border-radius: 1.25rem;
+            box-shadow: 0 1px 2px rgba(236,72,153,.04), 0 8px 24px -8px rgba(236,72,153,.10);
+            border: 1px solid #FCE7F3;
+        }
+        .day-card { transition: transform .12s ease, box-shadow .12s ease; }
+        .day-card:hover { transform: translateY(-1px); box-shadow: 0 2px 4px rgba(236,72,153,.06), 0 12px 28px -8px rgba(236,72,153,.14); }
+        .pill {
+            display: inline-flex; align-items: center; gap: .35rem;
+            padding: .15rem .55rem; border-radius: 9999px;
+            font-size: .65rem; font-weight: 600; letter-spacing: .04em;
+            text-transform: uppercase;
+        }
+        .pill-green { background: #ECFDF5; color: #047857; }
+        .pill-amber { background: #FEF3C7; color: #92400E; }
+        .pill-rose  { background: #FEE2E2; color: #B91C1C; }
+        .pill-pink  { background: #FCE7F3; color: #BE185D; }
+        .pill-grey  { background: #F3F4F6; color: #4B5563; }
+        .stat-mono { font-variant-numeric: tabular-nums; }
+        .skeleton {
+            background: linear-gradient(90deg, #FCE7F3 0%, #FBCFE8 50%, #FCE7F3 100%);
+            background-size: 800px 100%;
+            animation: shimmer 1.6s linear infinite;
+            border-radius: .5rem;
+        }
+        @keyframes livepulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+        .live-dot { animation: livepulse 1.8s ease-in-out infinite; }
+    </style>
+</head>
+
+<body class="font-sans antialiased">
+
+<div class="mx-auto max-w-md px-4 pb-10 pt-3 sm:pt-5">
+
+    <!-- Header -->
+    <header class="mb-3 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+            <div class="w-9 h-9 rounded-2xl bg-blush-200 flex items-center justify-center">
+                <span class="text-blush-600 text-base">💗</span>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold tracking-tight">NIFTY Signals</h1>
+                <p class="text-[10px] text-muted uppercase tracking-widest">For Bestie 💕</p>
+            </div>
+        </div>
+        <div class="text-right">
+            <div id="market-status" class="pill pill-pink">
+                <span class="w-1.5 h-1.5 rounded-full bg-blush-500"></span>
+                <span id="market-status-text">…</span>
+            </div>
+            <div id="clock" class="text-[11px] text-muted mt-1 stat-mono">--:-- IST</div>
+        </div>
+    </header>
+
+    <!-- Nav -->
+    <nav class="mb-4 flex items-center gap-4 text-sm border-b border-blush-200 pb-2.5">
+        <a href="index.html" data-nav="now"     class="text-muted hover:text-blush-600">💗 Now</a>
+        <a href="day.html"   data-nav="today"   class="text-muted hover:text-blush-600">📅 Today</a>
+        <a href="history.html" data-nav="history" class="text-muted hover:text-blush-600">📜 History</a>
+    </nav>
+
+    <!-- Title + rollup -->
+    <section class="mb-3">
+        <h2 class="text-xl font-extrabold tracking-tight">History</h2>
+        <p class="text-xs text-muted mt-0.5">Recent trading days · tap a day to see its full timeline</p>
+    </section>
+
+    <!-- Rollup card -->
+    <section class="card px-5 py-4 mb-4 animate-fade-in">
+        <div class="grid grid-cols-3 gap-2">
+            <div class="rounded-xl bg-blush-100 px-3 py-2">
+                <p class="text-[10px] text-muted uppercase tracking-wider">Days</p>
+                <p id="ro-days" class="text-sm font-bold stat-mono">—</p>
+            </div>
+            <div class="rounded-xl bg-blush-100 px-3 py-2">
+                <p class="text-[10px] text-muted uppercase tracking-wider">Trades</p>
+                <p id="ro-trades" class="text-sm font-bold stat-mono">—</p>
+            </div>
+            <div class="rounded-xl bg-blush-100 px-3 py-2">
+                <p class="text-[10px] text-muted uppercase tracking-wider">Net P&amp;L</p>
+                <p id="ro-pnl" class="text-sm font-bold stat-mono">—</p>
+            </div>
+        </div>
+        <p id="ro-extra" class="text-[11px] text-muted mt-2.5">Loading…</p>
+    </section>
+
+    <!-- Day cards list -->
+    <section id="days" class="space-y-2.5">
+        <div class="card px-4 py-4"><div class="skeleton h-3 w-2/3 mb-2"></div><div class="skeleton h-2 w-1/2"></div></div>
+        <div class="card px-4 py-4"><div class="skeleton h-3 w-3/4 mb-2"></div><div class="skeleton h-2 w-2/5"></div></div>
+        <div class="card px-4 py-4"><div class="skeleton h-3 w-1/2 mb-2"></div><div class="skeleton h-2 w-1/3"></div></div>
+    </section>
+
+    <footer class="mt-6 text-center">
+        <p class="text-[10px] text-muted/80">Data fetched from Supabase · 10-min cadence</p>
+    </footer>
+</div>
+
+<script src="history.js"></script>
+</body>
+</html>
