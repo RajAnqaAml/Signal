@@ -3,10 +3,14 @@
 # anon key + project URL are baked into the deploy without ever committing them.
 
 [build]
-  publish = "frontend"
+  # base = "frontend" hides the repo-root requirements.txt from Netlify's
+  # auto-detection, so it does NOT try to pip install the backend deps
+  # (which are only needed by the Render recorder, not the static dashboard).
+  base = "frontend"
+  publish = "."
   command = """
     printf 'window.SUPABASE_CONFIG = { url: \"%s\", anonKey: \"%s\" };' \
-      \"$PUBLIC_SUPABASE_URL\" \"$PUBLIC_SUPABASE_ANON_KEY\" > frontend/config.js
+      \"$PUBLIC_SUPABASE_URL\" \"$PUBLIC_SUPABASE_ANON_KEY\" > config.js
   """
 
 # Note: set PUBLIC_SUPABASE_URL and PUBLIC_SUPABASE_ANON_KEY in
