@@ -127,12 +127,11 @@ def take_one(now, force=False):
         flush=True,
     )
 
-    # Push notifications — only on transition (NEUTRAL->CALL/PUT or direction flip).
-    # NIFTY is our trade focus, so always evaluate; BN we still alert but you can
-    # ignore it on your phone if you only trade NIFTY.
+    # Push notifications — NIFTY only. BANKNIFTY snapshot is still written
+    # to DB for backtest context, but no phone push (user's choice to focus
+    # on NIFTY only).
     try:
         _maybe_notify("NIFTY", n)
-        _maybe_notify("BANKNIFTY", b)
     except Exception as e:
         print(f"[notify] error: {e}", flush=True)
 

@@ -9,12 +9,19 @@ name: NSE Signal Recorder
 # outside the actual 9:15-15:30 window.
 
 on:
+  # PRIMARY trigger: external service (cron-job.org) hits GitHub's repository_dispatch
+  # API every 10 min during market hours. This fires within seconds — bypasses
+  # GitHub Actions' native cron delays (which can be 30 min to several hours
+  # on free tier during peak times).
+  repository_dispatch:
+    types: [run-recorder]
+
+  # FALLBACK trigger: native GitHub Actions cron. Subject to delays on free tier
+  # but works without any external dependency.
   schedule:
-    # GitHub Actions cron is UTC. Format: minute hour day-of-month month day-of-week
-    # */10 means every 10 minutes. 3-10 means hours 3,4,5,6,7,8,9,10. 1-5 = Mon-Fri.
     - cron: '*/10 3-10 * * 1-5'
 
-  # Allow manual triggering from the Actions tab for testing.
+  # Manual trigger from the Actions tab for testing.
   workflow_dispatch:
     inputs:
       force:
