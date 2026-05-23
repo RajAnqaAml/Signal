@@ -21,7 +21,7 @@ import os
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app import IST, build_signals_payload, is_market_open
 
@@ -34,6 +34,9 @@ try:
     import notify as _notify  # ntfy.sh push; safe to import even without creds
 except ImportError:
     _notify = None
+
+
+NOTIFY_COOLDOWN_MIN = 30  # suppress same-direction re-push within this window
 
 
 def _previous_signal(symbol: str) -> str:
@@ -64,10 +67,50 @@ def _previous_signal(symbol: str) -> str:
     return ""
 
 
+def _last_same_direction_push_age_min(symbol: str, direction: str):
+    """Find the most recent snapshot with the same direction in the last
+    NOTIFY_COOLDOWN_MIN minutes. Returns minutes-ago of that snap, or None if no
+    such snap. We treat any same-direction snap within the window as evidence
+    that a previous push already alerted on this trend — even through brief
+    NEUTRAL gaps.
+    """
+    if _db is None or not _db.is_configured():
+        return None
+    cli = _db.client(service=False) or _db.client(service=True)
+    if cli is None:
+        return None
+    cutoff = datetime.now(tz=IST) - timedelta(minutes=NOTIFY_COOLDOWN_MIN)
+    try:
+        resp = (
+            cli.table("snapshots")
+            .select("ts,signal")
+            .eq("symbol", symbol)
+            .eq("signal", direction)
+            .gte("ts", cutoff.isoformat())
+            .order("ts", desc=True)
+            .limit(2)
+            .execute()
+        )
+        rows = resp.data or []
+        # rows[0] is the one we just wrote (same direction); look at rows[1]
+        if len(rows) >= 2:
+            prior_ts = datetime.fromisoformat(rows[1]["ts"])
+            age_min = (datetime.now(tz=IST) - prior_ts).total_seconds() / 60
+            return age_min
+    except Exception:
+        pass
+    return None
+
+
 def _maybe_notify(symbol: str, sig_block: dict):
     """Decide whether to push a notification.
-    Rule: only when signal is CALL or PUT, AND the previous snapshot was different
-    (NEUTRAL -> CALL = alert; CALL -> CALL = silent; CALL -> PUT = alert).
+    Gates (ALL must be true):
+      1. signal is CALL or PUT (not NEUTRAL)
+      2. previous snapshot was different signal (transition, not continuation)
+      3. no same-direction push within the last NOTIFY_COOLDOWN_MIN minutes
+         (prevents re-alerts on a continuing trend that briefly flickered to
+         NEUTRAL — Thursday 2026-05-21 produced 3 PUT pushes that were really
+         the same trade because of this)
     """
     if _notify is None or not _notify.is_configured():
         return
@@ -77,6 +120,18 @@ def _maybe_notify(symbol: str, sig_block: dict):
     prev = _previous_signal(symbol)
     if prev == direction:
         return  # continuation, silent
+
+    # Cooldown check: even if this is a fresh transition, suppress if we already
+    # pushed in this direction within the cooldown window
+    age = _last_same_direction_push_age_min(symbol, direction)
+    if age is not None and age <= NOTIFY_COOLDOWN_MIN:
+        print(
+            f"[notify] {symbol} {direction} suppressed: same-direction push "
+            f"{age:.1f} min ago (cooldown {NOTIFY_COOLDOWN_MIN} min)",
+            flush=True,
+        )
+        return
+
     # New entry or direction flip — alert
     row_like = {**sig_block, "spot_price": sig_block.get("entry")}
     ok = _notify.send_signal_alert(symbol, row_like)

@@ -15,6 +15,9 @@ snapshots/
 history/
 logs/
 
+# Generated investor reports (regenerate with generate_investor_report.py)
+reports/
+
 # Frontend runtime config (generated at deploy time or copied from example)
 frontend/config.js
 

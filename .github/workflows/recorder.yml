@@ -1,25 +1,28 @@
 name: NSE Signal Recorder
 
-# Runs every 10 min during NSE market hours (Mon-Fri 9:15-15:30 IST = 03:45-10:00 UTC).
-# Each invocation runs recorder.py --once which captures one snapshot, writes to
-# Supabase, and pushes ntfy notification on signal transitions.
+# Captures one snapshot per fire during NSE market hours
+# (Mon-Fri 09:15-15:35 IST = 03:45-10:05 UTC).
 #
-# The cron range is slightly wider (03:00-10:00 UTC = 08:30-15:30 IST) so we
-# don't miss the opening tick. is_market_open() inside recorder skips writes
-# outside the actual 9:15-15:30 window.
+# *** PRIMARY trigger: cron-job.org -> repository_dispatch ***
+# Configure at https://cron-job.org with these settings:
+#   - URL: POST https://api.github.com/repos/<owner>/<repo>/dispatches
+#   - Body: {"event_type": "run-recorder"}
+#   - Header: Authorization: Bearer <fine-grained PAT with Actions:write>
+#   - Schedule: every 10 min from 03:45 UTC (09:15 IST) to 10:05 UTC (15:35 IST), Mon-Fri
+#   - First fire MUST be 03:45 UTC sharp to capture the market open
+#
+# *** FALLBACK trigger: GH-native cron (every 30 min) ***
+# GitHub free-tier native cron can lag 30+ min during peak hours, so we only
+# use it as a sparse backup. Cron-job.org is the source of truth for timing.
+# Was every 10 min -> caused dual-trigger duplicates (0.3-min gap snapshots).
 
 on:
-  # PRIMARY trigger: external service (cron-job.org) hits GitHub's repository_dispatch
-  # API every 10 min during market hours. This fires within seconds — bypasses
-  # GitHub Actions' native cron delays (which can be 30 min to several hours
-  # on free tier during peak times).
   repository_dispatch:
     types: [run-recorder]
 
-  # FALLBACK trigger: native GitHub Actions cron. Subject to delays on free tier
-  # but works without any external dependency.
   schedule:
-    - cron: '*/10 3-10 * * 1-5'
+    # Every 30 min from 03:30-10:00 UTC (09:00-15:30 IST). Backup only.
+    - cron: '0,30 3-10 * * 1-5'
 
   # Manual trigger from the Actions tab for testing.
   workflow_dispatch:

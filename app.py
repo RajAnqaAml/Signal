@@ -18,6 +18,10 @@ def is_market_open(now=None):
     """NSE cash/F&O session: Mon-Fri 09:15-15:30 IST.
     Holiday calendar is not handled here — /api/marketStatus is the authoritative
     source for that and is consulted at request time when the clock window matches.
+
+    We extend the close to 15:35 IST so a cron fire that lands a minute or two
+    after the bell still captures the closing snapshot. NSE's option-chain and
+    spot endpoints serve the close-of-day values for several minutes after 15:30.
     """
     now = now or datetime.now(tz=IST)
     if now.tzinfo is None:
@@ -27,7 +31,7 @@ def is_market_open(now=None):
     if now.weekday() >= 5:
         return False
     open_t = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    close_t = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    close_t = now.replace(hour=15, minute=35, second=0, microsecond=0)
     return open_t <= now <= close_t
 
 app = Flask(__name__)
@@ -306,6 +310,25 @@ def compute_macd(prices):
     return {"macd": macd_line, "signal": round(signal, 2), "histogram": histogram}
 
 
+def compute_atr(highs, lows, closes, period=14):
+    """Average True Range over the most recent `period` bars.
+    Returns None if not enough data — callers should fall back to a static value.
+    """
+    if len(closes) < period + 1:
+        return None
+    tr_vals = []
+    for i in range(1, len(closes)):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        tr_vals.append(tr)
+    if len(tr_vals) < period:
+        return None
+    return float(np.mean(tr_vals[-period:]))
+
+
 def compute_supertrend(highs, lows, closes, period=10, multiplier=3):
     """Simplified SuperTrend indicator."""
     if len(closes) < period:
@@ -394,12 +417,47 @@ def analyze_oi_spurts(oi_data, symbol="NIFTY"):
 
 
 # ─── Option Chain Analysis ──────────────────────────────────────────────────
-def analyze_option_chain(oc_data, spot, symbol="NIFTY"):
+OC_STALENESS_MAX_MIN = 5  # If NSE payload is older than this, drop Factor 8.
+
+
+def _oc_payload_age_min(oc_data, now_ist=None):
+    """Return how many minutes old the NSE option-chain payload is, based on
+    `records.timestamp` ("23-May-2026 15:23:45"). Returns None if the field is
+    missing or unparseable (we silently allow it in that case).
+    """
+    try:
+        ts_str = (oc_data or {}).get("records", {}).get("timestamp")
+        if not ts_str:
+            return None
+        # NSE format: "23-May-2026 15:23:45"
+        ts = datetime.strptime(ts_str, "%d-%b-%Y %H:%M:%S").replace(tzinfo=IST)
+        now_ist = now_ist or datetime.now(tz=IST)
+        return (now_ist - ts).total_seconds() / 60
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def analyze_option_chain(oc_data, spot, symbol="NIFTY", now_ist=None):
     """Compute PCR, Max Pain, support/resistance strikes, ATM OI flow, IV skew
     from the NSE option-chain payload. Operates on the **nearest expiry only**
     so signals reflect this-week positioning, not far-month noise.
+
+    Returns None if the payload is missing, malformed, OR stale beyond
+    OC_STALENESS_MAX_MIN minutes (CDN cache hits return None so Factor 8 is
+    zeroed out instead of polluting the score with old data).
     """
     if not oc_data or "records" not in oc_data:
+        return None
+
+    # Staleness guard: NSE has known CDN cases where it returns yesterday's
+    # data with HTTP 200. Drop the payload if its timestamp is too old.
+    age_min = _oc_payload_age_min(oc_data, now_ist)
+    if age_min is not None and age_min > OC_STALENESS_MAX_MIN:
+        print(
+            f"[OC stale] {symbol} payload is {age_min:.1f} min old "
+            f"(threshold {OC_STALENESS_MAX_MIN} min) - skipping Factor 8",
+            flush=True,
+        )
         return None
 
     records = oc_data["records"]
@@ -521,15 +579,40 @@ def build_real_history(chart_data, bucket_minutes=5):
 
 # ─── Signal Generator ───────────────────────────────────────────────────────
 def _gap_decay_weight(now_ist):
-    """Gap factor decay: 1.0 at market open (09:15 IST), linear -> 0.0 at 12:15 IST.
-    Rationale: a gap is high-information at open but is fully priced in within ~3 hours.
-    Without this, gap-down keeps penalizing the score all session even after recovery.
+    """Gap factor decay: step function so contributions stay integer-clean.
+    Returns 1.0 / 0.5 / 0 based on minutes since market open.
+
+    Why a step function:
+      - Previous design used a linear decay (1.0 -> 0.0 over 180 min), which
+        injected fractional values into trend_score. That broke threshold
+        comparisons like `score <= -3` for scores that were actually -2.95
+        due to a -0.5 gap contribution. Three Thursday 2026-05-21 snaps
+        displayed -3 but returned NEUTRAL because of this.
+      - Steps keep trend_score on the integer grid the rest of the engine
+        assumes.
     """
     market_open = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
     minutes_since_open = (now_ist - market_open).total_seconds() / 60
-    if minutes_since_open <= 0:
+    if minutes_since_open <= 75:    # 09:15 - 10:30 IST: gap fully in play
         return 1.0
-    return max(0.0, 1.0 - minutes_since_open / 180)
+    if minutes_since_open <= 135:   # 10:30 - 11:30 IST: half weight
+        return 0.5
+    return 0.0                       # 11:30 onwards: gap is priced in
+
+
+def _gap_bucket(gap_pct):
+    """Convert a gap percentage into an integer score contribution.
+    Returns +2 / +1 / 0 / -1 / -2 — never a fractional value.
+    """
+    if gap_pct >= 1.0:
+        return 2
+    if gap_pct >= 0.3:
+        return 1
+    if gap_pct <= -1.0:
+        return -2
+    if gap_pct <= -0.3:
+        return -1
+    return 0
 
 
 def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
@@ -592,17 +675,23 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
         trend_score -= 1
         reasons.append("Trading near day low -> Sellers in control")
 
-    # ── Factor 3: Gap Analysis (Open vs Prev Close) with time-decay ──
-    # Gap matters at 09:15 but is fully priced in by 12:15. Decay weight handles this.
+    # ── Factor 3: Gap Analysis (Open vs Prev Close) with step-function decay ──
+    # Gap matters at 09:15 but is fully priced in by 11:30. _gap_decay_weight
+    # returns 1.0 / 0.5 / 0, and _gap_bucket returns an integer ±1/±2 — together
+    # they keep the contribution integer-clean.
     gap_pct = ((day_open - prev_close) / prev_close * 100) if prev_close > 0 else 0
-    if gap_pct > 0.3:
-        contribution = 1.0 * gap_weight
+    gap_bucket = _gap_bucket(gap_pct)
+    if gap_bucket != 0 and gap_weight > 0:
+        # int(round(...)) guarantees an integer even when weight is 0.5 and
+        # bucket is odd (e.g. 0.5 * 1 -> 0; 0.5 * 2 -> 1).
+        contribution = int(round(gap_bucket * gap_weight))
         trend_score += contribution
-        reasons.append(f"Gap-up +{gap_pct:.2f}% × decay {gap_weight:.2f} = {contribution:+.2f}")
-    elif gap_pct < -0.3:
-        contribution = -1.0 * gap_weight
-        trend_score += contribution
-        reasons.append(f"Gap-down {gap_pct:.2f}% × decay {gap_weight:.2f} = {contribution:+.2f}")
+        if contribution != 0:
+            direction = "up" if gap_pct > 0 else "down"
+            reasons.append(
+                f"Gap-{direction} {gap_pct:+.2f}% (bucket {gap_bucket:+d}, "
+                f"decay {gap_weight:.1f}) -> {contribution:+d}"
+            )
 
     score += trend_score
 
@@ -770,18 +859,45 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
     confidence = min(abs(score) * 12, 95) * contrarian_penalty
     step = 50 if symbol == "NIFTY" else 100
 
+    # ── Volatility-scaled targets (ATR-based) ──
+    # Previous rule used fixed +/- 75 / 60 points which worked on high-vol days
+    # but was unreachable on flat days (Friday 2026-05-22: 0 targets hit anywhere).
+    # New rule: target = max(static_floor, ATR * multiplier). On a flat day, target
+    # shrinks. On a volatile day, target expands to capture larger moves.
+    #
+    # Static floors: T1 = 50 pts, SL = 40 pts (NIFTY) -- so we never trade with
+    # absurdly tight targets if ATR collapses.
+    atr_val = (technicals or {}).get("atr")
+    if atr_val and atr_val > 0:
+        t1_pts = max(50, int(round(atr_val * 1.5)))
+        t2_pts = max(100, int(round(atr_val * 3.0)))
+        sl_pts = max(40, int(round(atr_val * 1.2)))
+        target_basis = f"ATR={atr_val:.1f}"
+    else:
+        # Fallback to original step-based rule when ATR not available
+        # (warmup period, flow-only mode, or insufficient candle history).
+        t1_pts = int(step * 1.5)
+        t2_pts = int(step * 3.0)
+        sl_pts = int(step * 1.2)
+        target_basis = f"static step={step}"
+
+    def _round_to_step(price):
+        return round(price / step) * step
+
     if score >= 3:
         signal = "CALL"
         entry = spot
-        target1 = round((spot + step * 1.5) / step) * step
-        target2 = round((spot + step * 3) / step) * step
-        stop_loss = round((spot - step * 1.2) / step) * step
+        target1 = _round_to_step(spot + t1_pts)
+        target2 = _round_to_step(spot + t2_pts)
+        stop_loss = _round_to_step(spot - sl_pts)
+        reasons.append(f"Targets: T1={target1} T2={target2} SL={stop_loss} ({target_basis})")
     elif score <= -3:
         signal = "PUT"
         entry = spot
-        target1 = round((spot - step * 1.5) / step) * step
-        target2 = round((spot - step * 3) / step) * step
-        stop_loss = round((spot + step * 1.2) / step) * step
+        target1 = _round_to_step(spot - t1_pts)
+        target2 = _round_to_step(spot - t2_pts)
+        stop_loss = _round_to_step(spot + sl_pts)
+        reasons.append(f"Targets: T1={target1} T2={target2} SL={stop_loss} ({target_basis})")
     else:
         signal = "NEUTRAL"
         confidence = 0
@@ -879,7 +995,7 @@ def build_signals_payload(now_ist=None, verbose=True):
         spot_data = nse.fetch_spot_price(symbol)
         oi_analysis = analyze_oi_spurts(oi_data, symbol)
         oc_data = nse.fetch_option_chain(symbol)
-        oc_analysis = analyze_option_chain(oc_data, spot_data["price"], symbol) if oc_data else None
+        oc_analysis = analyze_option_chain(oc_data, spot_data["price"], symbol, now_ist) if oc_data else None
 
         chart = nse.fetch_intraday_chart(symbol)
         highs, lows, closes = build_real_history(chart)
@@ -890,12 +1006,14 @@ def build_signals_payload(now_ist=None, verbose=True):
             history_source = "synthetic"
             highs, lows, closes, prices = build_price_history(spot_data)
 
+        atr_val = compute_atr(highs, lows, closes, period=14) if len(closes) >= 15 else None
         technicals = {
             "rsi": compute_rsi(prices) if len(prices) > 0 else 50,
             "macd": compute_macd(prices) if len(prices) > 0 else {"macd": 0, "signal": 0, "histogram": 0},
             "ema9": compute_ema(prices, 9) if len(prices) > 0 else 0,
             "ema21": compute_ema(prices, 21) if len(prices) > 0 else 0,
             "supertrend": compute_supertrend(highs, lows, closes) if len(closes) > 0 else "NEUTRAL",
+            "atr": atr_val,
             "history_source": history_source,
             "bars": int(len(closes)),
         }
