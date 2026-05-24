@@ -182,11 +182,18 @@ def take_one(now, force=False):
         flush=True,
     )
 
-    # Push notifications — NIFTY only. BANKNIFTY snapshot is still written
-    # to DB for backtest context, but no phone push (user's choice to focus
-    # on NIFTY only).
+    # Push notifications for BOTH symbols. _maybe_notify enforces the
+    # transition gate + 30-min same-direction cooldown independently per
+    # symbol. BANKNIFTY was originally silenced; we re-enabled it after the
+    # 3-day data review showed BN notifications had 100% hit rate on +75 pts
+    # across 5 fires. notify.py already has BN-aware TARGET_PTS / SL_PTS /
+    # STRIKE_STEP / LOT_SIZE so the phone alert sizes correctly for BN.
     try:
         _maybe_notify("NIFTY", n)
+    except Exception as e:
+        print(f"[notify] error: {e}", flush=True)
+    try:
+        _maybe_notify("BANKNIFTY", b)
     except Exception as e:
         print(f"[notify] error: {e}", flush=True)
 

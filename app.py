@@ -865,13 +865,21 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
     # New rule: target = max(static_floor, ATR * multiplier). On a flat day, target
     # shrinks. On a volatile day, target expands to capture larger moves.
     #
-    # Static floors: T1 = 50 pts, SL = 40 pts (NIFTY) -- so we never trade with
-    # absurdly tight targets if ATR collapses.
+    # Symbol-aware static floors -- BANKNIFTY spot is ~2.3x NIFTY and naturally
+    # more volatile, so a 50-pt floor (NIFTY-appropriate) would give nonsensically
+    # tight BN targets (~0.09% of spot). NIFTY values are unchanged from the prior
+    # design.
+    ATR_FLOORS = {
+        # symbol: (t1_floor, t2_floor, sl_floor)
+        "NIFTY":     (50,  100, 40),   # unchanged
+        "BANKNIFTY": (100, 200, 80),   # 2x NIFTY, matches strike-step ratio
+    }
+    t1_floor, t2_floor, sl_floor = ATR_FLOORS.get(symbol, (50, 100, 40))
     atr_val = (technicals or {}).get("atr")
     if atr_val and atr_val > 0:
-        t1_pts = max(50, int(round(atr_val * 1.5)))
-        t2_pts = max(100, int(round(atr_val * 3.0)))
-        sl_pts = max(40, int(round(atr_val * 1.2)))
+        t1_pts = max(t1_floor, int(round(atr_val * 1.5)))
+        t2_pts = max(t2_floor, int(round(atr_val * 3.0)))
+        sl_pts = max(sl_floor, int(round(atr_val * 1.2)))
         target_basis = f"ATR={atr_val:.1f}"
     else:
         # Fallback to original step-based rule when ATR not available
