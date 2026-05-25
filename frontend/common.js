@@ -5,15 +5,31 @@
     "use strict";
 
     // ─── Constants (mirror notify.py / eod_report.py) ─────────────────
-    const SYMBOL = "NIFTY";
-    const LOT_SIZE = 75;
-    const STRIKE_STEP = 50;
-    const TARGET_PTS = 30;
-    const SL_PTS = 15;
+    const DEFAULT_SYMBOL = "NIFTY";
+    const SYMBOLS = ["NIFTY", "BANKNIFTY"];
+
+    // Per-symbol option-chain constants. BANKNIFTY has a different lot size,
+    // wider strike step, and the engine uses 2x targets/stops compared to NIFTY.
+    const SYMBOL_CONFIG = {
+        NIFTY:     { lot: 75, step: 50,  target: 30, sl: 15, label: "NIFTY"     },
+        BANKNIFTY: { lot: 15, step: 100, target: 60, sl: 30, label: "BANK NIFTY" },
+    };
+
+    // Legacy aliases (keep until all callsites migrated)
+    const SYMBOL = DEFAULT_SYMBOL;
+    const LOT_SIZE = SYMBOL_CONFIG.NIFTY.lot;
+    const STRIKE_STEP = SYMBOL_CONFIG.NIFTY.step;
+    const TARGET_PTS = SYMBOL_CONFIG.NIFTY.target;
+    const SL_PTS = SYMBOL_CONFIG.NIFTY.sl;
+
     const ATM_DELTA = 0.5;
     const BROKERAGE_PER_TRADE = 100;
     const COOLDOWN_MIN = 60;
     const STALE_MIN = 15;
+
+    function cfg(symbol) {
+        return SYMBOL_CONFIG[symbol] || SYMBOL_CONFIG[DEFAULT_SYMBOL];
+    }
 
     // ─── Supabase client (lazy init so each page only opens it once) ──
     let _supa = null;
@@ -82,14 +98,15 @@
         if (score >= 3 && conf >= 30 && !contrarian) return "YELLOW";
         return "RED";
     }
-    function recommendStrike(spot) {
-        return Math.round(Number(spot) / STRIKE_STEP) * STRIKE_STEP;
+    function recommendStrike(spot, symbol = DEFAULT_SYMBOL) {
+        const step = cfg(symbol).step;
+        return Math.round(Number(spot) / step) * step;
     }
     function optionType(signal) {
         return signal === "PUT" ? "PE" : "CE";
     }
-    function estINR(pts) {
-        return Math.round(Math.abs(pts) * ATM_DELTA * LOT_SIZE);
+    function estINR(pts, symbol = DEFAULT_SYMBOL) {
+        return Math.round(Math.abs(pts) * ATM_DELTA * cfg(symbol).lot);
     }
 
     // ─── Day P&L (same rule as eod_report.py, but using snapshots only) ──
@@ -98,7 +115,8 @@
      * Exit when subsequent spot moves ≥+30 (win) or ≤-15 (loss). Otherwise open.
      * Last snapshot's spot is the proxy "current" for any still-open trade.
      */
-    function simulateDay(snaps) {
+    function simulateDay(snaps, symbol = DEFAULT_SYMBOL) {
+        const c = cfg(symbol);
         const result = { trades: 0, wins: 0, losses: 0, openCount: 0, netPts: 0, netInr: 0, entries: [] };
         if (!snaps || snaps.length === 0) return result;
         const latestSpot = Number(snaps[snaps.length - 1].spot_price);
@@ -113,14 +131,14 @@
             const entry = Number(s.spot_price);
             const move = s.signal === "PUT" ? entry - latestSpot : latestSpot - entry;
             let outcome, pts;
-            if (move >= TARGET_PTS) { outcome = "WIN"; pts = TARGET_PTS; }
-            else if (move <= -SL_PTS) { outcome = "LOSS"; pts = -SL_PTS; }
-            else { outcome = "OPEN"; pts = move; }
+            if (move >= c.target)  { outcome = "WIN";  pts = c.target; }
+            else if (move <= -c.sl) { outcome = "LOSS"; pts = -c.sl; }
+            else                    { outcome = "OPEN"; pts = move; }
 
             result.trades += 1;
-            if (outcome === "WIN") { result.wins += 1; result.netInr += estINR(TARGET_PTS); }
-            else if (outcome === "LOSS") { result.losses += 1; result.netInr -= estINR(SL_PTS); }
-            else { result.openCount += 1; /* don't include in netInr until closed */ }
+            if (outcome === "WIN")       { result.wins += 1;   result.netInr += estINR(c.target, symbol); }
+            else if (outcome === "LOSS") { result.losses += 1; result.netInr -= estINR(c.sl, symbol); }
+            else                          { result.openCount += 1; }
             result.netPts += pts;
             result.entries.push({ ts: s.ts, signal: s.signal, entry, outcome, pts });
         }
@@ -216,6 +234,8 @@
         // constants
         SYMBOL, LOT_SIZE, STRIKE_STEP, TARGET_PTS, SL_PTS, ATM_DELTA,
         BROKERAGE_PER_TRADE, COOLDOWN_MIN, STALE_MIN,
+        // symbol-aware config
+        DEFAULT_SYMBOL, SYMBOLS, SYMBOL_CONFIG, cfg,
         // client
         supa,
         // time

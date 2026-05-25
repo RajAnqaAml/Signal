@@ -8,6 +8,22 @@
 
     NSE.markActiveNav("history");
 
+    // ─── Symbol selection ─────────────────────────────────────────────
+    let symbol = (localStorage.getItem("signals_symbol") || "NIFTY").toUpperCase();
+    if (!NSE.SYMBOLS.includes(symbol)) symbol = "NIFTY";
+    function selectSymbol(s) {
+        symbol = s;
+        localStorage.setItem("signals_symbol", s);
+        document.querySelectorAll(".symbol-btn").forEach(b => {
+            b.classList.toggle("active", b.getAttribute("data-symbol") === s);
+        });
+        refresh();
+    }
+    document.querySelectorAll(".symbol-btn").forEach(b => {
+        b.addEventListener("click", () => selectSymbol(b.getAttribute("data-symbol")));
+        b.classList.toggle("active", b.getAttribute("data-symbol") === symbol);
+    });
+
     function renderClock() {
         $("clock").textContent = NSE.fmtClock(NSE.nowIST());
         const open = NSE.isMarketOpen();
@@ -34,7 +50,7 @@
             const move = last - first;
             const movePct = (move / first) * 100;
             const signals = rows.filter(r => r.signal !== "NEUTRAL").length;
-            const sim = NSE.simulateDay(rows);
+            const sim = NSE.simulateDay(rows, symbol);
             return { date, count: rows.length, signals, first, last, move, movePct, sim };
         });
     }
@@ -113,7 +129,7 @@
 
     async function refresh() {
         renderClock();
-        const raw = await NSE.fetchRecentDays(30);  // last 30 days max
+        const raw = await NSE.fetchRecentDays(30, symbol);  // last 30 days max
         const summaries = summarize(raw);
         rollupHtml(summaries);
         renderDays(summaries);

@@ -1,4 +1,5 @@
-/* Landing page (index.html) — "Now" view.
+/* Landing page (index.html) - "Now" view.
+ * Renders TWO hero cards (NIFTY + BANKNIFTY) and a two-row Today tally.
  * Uses helpers from common.js (window.NSE).
  */
 (function () {
@@ -7,113 +8,132 @@
     if (!NSE) { console.error("common.js must load before dashboard.js"); return; }
     const $ = (id) => document.getElementById(id);
 
-    // ─── Hero card render ─────────────────────────────────────────────
-    function setStripe(cls) {
-        const hero = $("hero");
+    // Each hero card has the same DOM structure with different id prefixes.
+    // For NIFTY:     prefix = "hero"        (legacy ids: hero-tier, hero-time, ...)
+    // For BANKNIFTY: prefix = "hero-bn"     (ids: hero-bn-tier, hero-bn-time, ...)
+    // Today tally NIFTY: "today-*"     BN: "today-bn-*"
+    const HERO_PREFIX = { NIFTY: "hero", BANKNIFTY: "hero-bn" };
+    const TODAY_PREFIX = { NIFTY: "today", BANKNIFTY: "today-bn" };
+
+    function el(prefix, suffix) {
+        return $(suffix ? `${prefix}-${suffix}` : prefix);
+    }
+
+    // --- Hero card renderers (parameterized by symbol/prefix) -----------
+    function setStripe(prefix, cls) {
+        const hero = $(prefix);
         hero.classList.remove("stripe-green", "stripe-amber", "stripe-rose", "stripe-muted");
         hero.classList.add(cls);
     }
-    function setTierPill(label, cls) {
-        const el = $("hero-tier");
-        el.classList.remove("pill-green", "pill-amber", "pill-rose", "pill-grey");
-        el.classList.add(cls);
-        el.textContent = label;
+    function setTierPill(prefix, label, cls) {
+        const e = el(prefix, "tier");
+        e.classList.remove("pill-green", "pill-amber", "pill-rose", "pill-grey");
+        e.classList.add(cls);
+        e.textContent = label;
     }
-    function showHero() {
-        $("hero-skeleton").classList.add("hidden");
-        $("hero-content").classList.remove("hidden");
-    }
-
-    function renderClosed(lastRow) {
-        showHero();
-        setStripe("stripe-muted");
-        setTierPill("— waiting", "pill-grey");
-        $("hero-time").textContent = lastRow ? NSE.fmtTime(lastRow.ts) : "";
-        $("hero-action").textContent = "Market Closed";
-        $("hero-instrument").textContent = "Reopens Mon 09:15 IST";
-        $("hero-levels").classList.add("hidden");
-        $("hero-exit-note").classList.add("hidden");
-        $("hero-paper-only").classList.add("hidden");
-        $("hero-why-text").textContent = "Take it easy — no signals until next trading session.";
+    function showHero(prefix) {
+        el(prefix, "skeleton").classList.add("hidden");
+        el(prefix, "content").classList.remove("hidden");
     }
 
-    function renderWait(row) {
-        showHero();
-        setStripe("stripe-muted");
-        setTierPill("— waiting", "pill-grey");
-        $("hero-time").textContent = NSE.fmtTime(row.ts);
-        $("hero-action").textContent = "Wait";
-        $("hero-instrument").textContent = `Spot ${NSE.fmtSpot(row.spot_price)} · No setup yet`;
-        $("hero-levels").classList.add("hidden");
-        $("hero-exit-note").classList.add("hidden");
-        $("hero-paper-only").classList.add("hidden");
+    function renderClosed(prefix, lastRow, symbol) {
+        showHero(prefix);
+        setStripe(prefix, "stripe-muted");
+        setTierPill(prefix, "— waiting", "pill-grey");
+        el(prefix, "time").textContent = lastRow ? NSE.fmtTime(lastRow.ts) : "";
+        el(prefix, "action").textContent = "Market Closed";
+        el(prefix, "instrument").textContent = "Reopens Mon 09:15 IST";
+        el(prefix, "levels").classList.add("hidden");
+        el(prefix, "exit-note").classList.add("hidden");
+        el(prefix, "paper-only").classList.add("hidden");
+        el(prefix, "why-text").textContent = "Take it easy — no signals until next trading session.";
+    }
+
+    function renderWait(prefix, row, symbol) {
+        showHero(prefix);
+        setStripe(prefix, "stripe-muted");
+        setTierPill(prefix, "— waiting", "pill-grey");
+        el(prefix, "time").textContent = NSE.fmtTime(row.ts);
+        el(prefix, "action").textContent = "Wait";
+        el(prefix, "instrument").textContent = `Spot ${NSE.fmtSpot(row.spot_price)} · No setup yet`;
+        el(prefix, "levels").classList.add("hidden");
+        el(prefix, "exit-note").classList.add("hidden");
+        el(prefix, "paper-only").classList.add("hidden");
         const reasons = NSE.topReasons(row.reasons, 2);
-        $("hero-why-text").textContent = reasons.length
+        el(prefix, "why-text").textContent = reasons.length
             ? reasons.join(" · ")
             : "Engine doesn't see a clear direction right now.";
     }
 
-    function renderBuy(row, tier) {
-        showHero();
-        setStripe(tier === "GREEN" ? "stripe-green" : "stripe-amber");
-        setTierPill(
+    function renderBuy(prefix, row, tier, symbol) {
+        const cfg = NSE.cfg(symbol);
+        showHero(prefix);
+        setStripe(prefix, tier === "GREEN" ? "stripe-green" : "stripe-amber");
+        setTierPill(prefix,
             tier === "GREEN" ? "🟢 GREEN · trade OK" : "🟡 YELLOW · paper only",
             tier === "GREEN" ? "pill-green" : "pill-amber",
         );
-        $("hero-time").textContent = NSE.fmtTime(row.ts);
+        el(prefix, "time").textContent = NSE.fmtTime(row.ts);
 
         const dir = row.signal;
         const spot = Number(row.spot_price);
-        const strike = NSE.recommendStrike(spot);
+        const strike = NSE.recommendStrike(spot, symbol);
         const opt = NSE.optionType(dir);
-        const targetSpot = dir === "PUT" ? spot - NSE.TARGET_PTS : spot + NSE.TARGET_PTS;
-        const stopSpot   = dir === "PUT" ? spot + NSE.SL_PTS    : spot - NSE.SL_PTS;
+        const targetSpot = dir === "PUT" ? spot - cfg.target : spot + cfg.target;
+        const stopSpot   = dir === "PUT" ? spot + cfg.sl     : spot - cfg.sl;
 
-        $("hero-action").textContent = "Buy";
-        $("hero-instrument").textContent = `NIFTY ${strike} ${opt}`;
+        el(prefix, "action").textContent = "Buy";
+        el(prefix, "instrument").textContent = `${cfg.label} ${strike} ${opt}`;
 
-        $("hero-levels").classList.remove("hidden");
-        $("hero-spot").textContent = NSE.fmtSpot(spot);
-        $("hero-target").textContent = NSE.fmtSpot(targetSpot);
-        $("hero-target-inr").textContent = NSE.fmtINR(NSE.estINR(NSE.TARGET_PTS));
-        $("hero-stop").textContent = NSE.fmtSpot(stopSpot);
-        $("hero-stop-inr").textContent = NSE.fmtINR(-NSE.estINR(NSE.SL_PTS));
+        el(prefix, "levels").classList.remove("hidden");
+        el(prefix, "spot").textContent = NSE.fmtSpot(spot);
+        el(prefix, "target").textContent = NSE.fmtSpot(targetSpot);
+        el(prefix, "target-inr").textContent = NSE.fmtINR(NSE.estINR(cfg.target, symbol));
+        el(prefix, "stop").textContent = NSE.fmtSpot(stopSpot);
+        el(prefix, "stop-inr").textContent = NSE.fmtINR(-NSE.estINR(cfg.sl, symbol));
 
-        $("hero-exit-note").classList.remove("hidden");
-        $("hero-paper-only").classList.toggle("hidden", tier !== "YELLOW");
+        el(prefix, "exit-note").classList.remove("hidden");
+        el(prefix, "paper-only").classList.toggle("hidden", tier !== "YELLOW");
 
         const reasons = NSE.topReasons(row.reasons, 2);
-        $("hero-why-text").textContent = reasons.length
+        el(prefix, "why-text").textContent = reasons.length
             ? reasons.join(" · ")
             : "Multiple factors align with the signal direction.";
     }
 
-    function renderHero(row) {
+    function renderHero(symbol, row) {
+        const prefix = HERO_PREFIX[symbol];
         if (!row) return;
-        if (!NSE.isMarketOpen()) { renderClosed(row); return; }
-        if (row.signal === "NEUTRAL") { renderWait(row); return; }
-        renderBuy(row, NSE.tierOf(row));
+        if (!NSE.isMarketOpen()) { renderClosed(prefix, row, symbol); return; }
+        if (row.signal === "NEUTRAL") { renderWait(prefix, row, symbol); return; }
+        renderBuy(prefix, row, NSE.tierOf(row), symbol);
     }
 
-    // ─── Today's tally card ───────────────────────────────────────────
-    function renderToday(snaps) {
-        const r = NSE.simulateDay(snaps);
-        $("today-date").textContent = NSE.todayDateIST();
-        $("today-trades").textContent = `${r.trades} ${r.trades === 1 ? "trade" : "trades"}`;
+    // --- Today tally renderer -------------------------------------------
+    function renderTodayOne(symbol, snaps) {
+        const prefix = TODAY_PREFIX[symbol];
+        const r = NSE.simulateDay(snaps, symbol);
+        el(prefix, "trades").textContent = `${r.trades} ${r.trades === 1 ? "trade" : "trades"}`;
         if (r.trades === 0) {
-            $("today-record").textContent = "—";
-            $("today-pnl").textContent = "—";
-            $("today-pnl").className = "text-2xl font-extrabold text-muted stat-mono";
+            el(prefix, "record").textContent = "—";
+            el(prefix, "pnl").textContent = "—";
+            el(prefix, "pnl").className = "text-xl font-extrabold text-muted stat-mono";
         } else {
-            $("today-record").textContent =
+            el(prefix, "record").textContent =
                 `${r.wins}W / ${r.losses}L` + (r.openCount ? ` · ${r.openCount} open` : "");
-            $("today-pnl").textContent = NSE.fmtINR(r.netInr);
-            $("today-pnl").className = "text-2xl font-extrabold stat-mono "
+            el(prefix, "pnl").textContent = NSE.fmtINR(r.netInr);
+            el(prefix, "pnl").className = "text-xl font-extrabold stat-mono "
                 + (r.netInr > 0 ? "text-emerald" : r.netInr < 0 ? "text-rose" : "text-muted");
         }
     }
 
-    // ─── Clock & market-status pill ───────────────────────────────────
+    function renderToday(dataBySymbol) {
+        $("today-date").textContent = NSE.todayDateIST();
+        renderTodayOne("NIFTY", dataBySymbol.NIFTY);
+        renderTodayOne("BANKNIFTY", dataBySymbol.BANKNIFTY);
+    }
+
+    // --- Clock & market-status pill -------------------------------------
     function renderClock() {
         const now = NSE.nowIST();
         $("clock").textContent = NSE.fmtClock(now);
@@ -132,9 +152,10 @@
         }
     }
 
-    // ─── Stale-data banner + footer "last update" ─────────────────────
-    function renderStale(lastTs) {
-        const ageMin = lastTs ? (Date.now() - new Date(lastTs).getTime()) / 60000 : null;
+    // --- Stale-data banner + footer "last update" -----------------------
+    // Uses whichever symbol has the more recent snapshot
+    function renderStale(latestTs) {
+        const ageMin = latestTs ? (Date.now() - new Date(latestTs).getTime()) / 60000 : null;
         const banner = $("stale-banner");
         if (ageMin !== null && ageMin > NSE.STALE_MIN && NSE.isMarketOpen()) {
             banner.classList.remove("hidden");
@@ -143,23 +164,35 @@
         } else {
             banner.classList.add("hidden");
         }
-        $("last-update").textContent = lastTs ? NSE.fmtTime(lastTs) + " IST" : "—";
-        $("last-update-age").textContent = lastTs
+        $("last-update").textContent = latestTs ? NSE.fmtTime(latestTs) + " IST" : "—";
+        $("last-update-age").textContent = latestTs
             ? `(${Math.max(0, Math.round(ageMin))} min ago)` : "";
     }
 
-    // ─── Refresh loop ─────────────────────────────────────────────────
+    // --- Refresh loop ---------------------------------------------------
     async function refresh() {
         renderClock();
-        const [latest, today] = await Promise.all([
-            NSE.fetchLatest(),
-            NSE.fetchDay(NSE.todayDateIST()),
+        const today = NSE.todayDateIST();
+        const [niftyLatest, bnLatest, niftyDay, bnDay] = await Promise.all([
+            NSE.fetchLatest("NIFTY"),
+            NSE.fetchLatest("BANKNIFTY"),
+            NSE.fetchDay(today, "NIFTY"),
+            NSE.fetchDay(today, "BANKNIFTY"),
         ]);
-        if (latest) { renderHero(latest); renderStale(latest.ts); } else { renderStale(null); }
-        renderToday(today);
+        renderHero("NIFTY", niftyLatest);
+        renderHero("BANKNIFTY", bnLatest);
+        renderToday({ NIFTY: niftyDay, BANKNIFTY: bnDay });
+
+        // Stale banner: use whichever symbol is most recent
+        const latestTs = [niftyLatest, bnLatest]
+            .filter(r => r && r.ts)
+            .map(r => r.ts)
+            .sort()
+            .pop() || null;
+        renderStale(latestTs);
     }
 
-    // ─── Boot ─────────────────────────────────────────────────────────
+    // --- Boot -----------------------------------------------------------
     NSE.markActiveNav("now");
     refresh();
     setInterval(renderClock, 1000);

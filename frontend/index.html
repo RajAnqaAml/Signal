@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#FDF2F8">
-    <title>NIFTY Signals</title>
+    <title>NIFTY + BANKNIFTY Signals</title>
 
     <!-- Tailwind via CDN (no build step). Custom pink palette below. -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -127,8 +127,8 @@
                 <span class="text-blush-600 text-base">💗</span>
             </div>
             <div>
-                <h1 class="text-lg font-bold tracking-tight">NIFTY Signals</h1>
-                <p class="text-[10px] text-muted uppercase tracking-widest">For Bestie 💕</p>
+                <h1 class="text-lg font-bold tracking-tight">Signals</h1>
+                <p class="text-[10px] text-muted uppercase tracking-widest">NIFTY + BANK NIFTY</p>
             </div>
         </div>
         <div class="text-right">
@@ -147,10 +147,10 @@
         <a href="history.html" data-nav="history" class="text-muted hover:text-blush-600">📜 History</a>
     </nav>
 
-    <!-- ─── HERO CARD — the only thing she really watches ─── -->
-    <section id="hero" class="card hero-card stripe-muted px-5 py-6 mb-3 animate-fade-in">
+    <!-- ─── NIFTY HERO CARD ─── -->
+    <p class="text-[10px] font-semibold text-blush-700 uppercase tracking-widest mb-1.5 px-1">NIFTY</p>
+    <section id="hero" data-symbol="NIFTY" class="card hero-card stripe-muted px-5 py-6 mb-4 animate-fade-in">
 
-        <!-- Loading skeleton (shown until first data arrives) -->
         <div id="hero-skeleton">
             <div class="skeleton h-4 w-24 mb-4"></div>
             <div class="skeleton h-10 w-40 mb-3"></div>
@@ -158,21 +158,15 @@
             <div class="skeleton h-3 w-44"></div>
         </div>
 
-        <!-- Real content (populated by dashboard.js) -->
         <div id="hero-content" class="hidden">
-            <!-- Top row: tier badge + symbol -->
             <div class="flex items-center justify-between mb-3">
                 <span id="hero-tier" class="pill pill-grey">—</span>
                 <span class="text-xs text-muted stat-mono" id="hero-time">--:--</span>
             </div>
-
-            <!-- Headline action — biggest text on the page -->
             <div class="mb-1">
                 <p id="hero-action" class="text-3xl font-extrabold tracking-tight text-ink">—</p>
                 <p id="hero-instrument" class="text-base font-semibold text-blush-600 mt-0.5 stat-mono">—</p>
             </div>
-
-            <!-- Levels grid (visible only on BUY state) -->
             <div id="hero-levels" class="mt-4 grid grid-cols-3 gap-2 hidden">
                 <div class="rounded-xl bg-blush-100 px-3 py-2.5">
                     <p class="text-[10px] text-muted uppercase tracking-wider">Spot</p>
@@ -189,20 +183,63 @@
                     <p class="text-[10px] text-rose-700 stat-mono" id="hero-stop-inr">—</p>
                 </div>
             </div>
-
-            <!-- Exit reminder (visible only on BUY state) -->
             <p id="hero-exit-note" class="mt-3 text-xs text-muted hidden">
                 ⏱ Exit in <span class="font-semibold text-ink">10 minutes</span> if neither target nor stop hits
             </p>
-
-            <!-- Why (1-2 short reasons) -->
             <div id="hero-why" class="mt-4 pt-4 border-t border-blush-200">
                 <p class="text-[10px] text-muted uppercase tracking-wider mb-1.5">Why</p>
                 <p id="hero-why-text" class="text-xs text-ink leading-relaxed">—</p>
             </div>
-
-            <!-- Paper-trade tag (YELLOW only) -->
             <p id="hero-paper-only" class="mt-3 text-[11px] text-amber-700 font-medium hidden">
+                Paper trade only — not validated yet for real money
+            </p>
+        </div>
+    </section>
+
+    <!-- ─── BANK NIFTY HERO CARD ─── -->
+    <p class="text-[10px] font-semibold text-blush-700 uppercase tracking-widest mb-1.5 px-1">Bank Nifty</p>
+    <section id="hero-bn" data-symbol="BANKNIFTY" class="card hero-card stripe-muted px-5 py-6 mb-3 animate-fade-in">
+
+        <div id="hero-bn-skeleton">
+            <div class="skeleton h-4 w-24 mb-4"></div>
+            <div class="skeleton h-10 w-40 mb-3"></div>
+            <div class="skeleton h-3 w-32 mb-2"></div>
+            <div class="skeleton h-3 w-44"></div>
+        </div>
+
+        <div id="hero-bn-content" class="hidden">
+            <div class="flex items-center justify-between mb-3">
+                <span id="hero-bn-tier" class="pill pill-grey">—</span>
+                <span class="text-xs text-muted stat-mono" id="hero-bn-time">--:--</span>
+            </div>
+            <div class="mb-1">
+                <p id="hero-bn-action" class="text-3xl font-extrabold tracking-tight text-ink">—</p>
+                <p id="hero-bn-instrument" class="text-base font-semibold text-blush-600 mt-0.5 stat-mono">—</p>
+            </div>
+            <div id="hero-bn-levels" class="mt-4 grid grid-cols-3 gap-2 hidden">
+                <div class="rounded-xl bg-blush-100 px-3 py-2.5">
+                    <p class="text-[10px] text-muted uppercase tracking-wider">Spot</p>
+                    <p class="text-sm font-bold stat-mono" id="hero-bn-spot">—</p>
+                </div>
+                <div class="rounded-xl bg-emerald-50 px-3 py-2.5">
+                    <p class="text-[10px] text-emerald-700 uppercase tracking-wider">Target</p>
+                    <p class="text-sm font-bold text-emerald-700 stat-mono" id="hero-bn-target">—</p>
+                    <p class="text-[10px] text-emerald-700 stat-mono" id="hero-bn-target-inr">—</p>
+                </div>
+                <div class="rounded-xl bg-rose-50 px-3 py-2.5">
+                    <p class="text-[10px] text-rose-700 uppercase tracking-wider">Stop</p>
+                    <p class="text-sm font-bold text-rose-700 stat-mono" id="hero-bn-stop">—</p>
+                    <p class="text-[10px] text-rose-700 stat-mono" id="hero-bn-stop-inr">—</p>
+                </div>
+            </div>
+            <p id="hero-bn-exit-note" class="mt-3 text-xs text-muted hidden">
+                ⏱ Exit in <span class="font-semibold text-ink">10 minutes</span> if neither target nor stop hits
+            </p>
+            <div id="hero-bn-why" class="mt-4 pt-4 border-t border-blush-200">
+                <p class="text-[10px] text-muted uppercase tracking-wider mb-1.5">Why</p>
+                <p id="hero-bn-why-text" class="text-xs text-ink leading-relaxed">—</p>
+            </div>
+            <p id="hero-bn-paper-only" class="mt-3 text-[11px] text-amber-700 font-medium hidden">
                 Paper trade only — not validated yet for real money
             </p>
         </div>
@@ -210,16 +247,29 @@
 
     <!-- ─── TODAY'S TALLY ─── -->
     <section id="today" class="card px-5 py-4 mb-3 animate-fade-in">
-        <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center justify-between mb-3">
             <h2 class="text-xs font-semibold text-muted uppercase tracking-widest">Today</h2>
             <span id="today-date" class="text-[10px] text-muted stat-mono">—</span>
         </div>
-        <div class="flex items-baseline justify-between">
+
+        <!-- NIFTY row -->
+        <div class="flex items-baseline justify-between pb-3 mb-3 border-b border-blush-200">
             <div>
+                <p class="text-[10px] text-muted uppercase tracking-widest mb-0.5">NIFTY</p>
                 <p id="today-trades" class="text-sm font-semibold text-ink">— trades</p>
                 <p id="today-record" class="text-[11px] text-muted">— W / — L</p>
             </div>
-            <p id="today-pnl" class="text-2xl font-extrabold text-muted stat-mono">—</p>
+            <p id="today-pnl" class="text-xl font-extrabold text-muted stat-mono">—</p>
+        </div>
+
+        <!-- BANK NIFTY row -->
+        <div class="flex items-baseline justify-between">
+            <div>
+                <p class="text-[10px] text-muted uppercase tracking-widest mb-0.5">Bank Nifty</p>
+                <p id="today-bn-trades" class="text-sm font-semibold text-ink">— trades</p>
+                <p id="today-bn-record" class="text-[11px] text-muted">— W / — L</p>
+            </div>
+            <p id="today-bn-pnl" class="text-xl font-extrabold text-muted stat-mono">—</p>
         </div>
     </section>
 

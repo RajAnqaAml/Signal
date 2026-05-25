@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#FDF2F8">
-    <title>NIFTY · Day View</title>
+    <title>Day View</title>
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -72,6 +72,11 @@
         .snap-row.tier-green  { border-left-color: #10B981; background: #ECFDF522; }
         .snap-row.tier-amber  { border-left-color: #F59E0B; background: #FEF3C722; }
         .snap-row.tier-rose   { border-left-color: #EF4444; background: #FEE2E222; }
+
+        /* Notification rows: subtle pink outer ring so they pop in All-snaps view */
+        .snap-row.is-notif {
+            box-shadow: 0 0 0 2px #FBCFE8, 0 1px 2px rgba(236,72,153,.04), 0 8px 24px -8px rgba(236,72,153,.10);
+        }
     </style>
 </head>
 
@@ -86,8 +91,8 @@
                 <span class="text-blush-600 text-base">💗</span>
             </div>
             <div>
-                <h1 class="text-lg font-bold tracking-tight">NIFTY Signals</h1>
-                <p class="text-[10px] text-muted uppercase tracking-widest">For Bestie 💕</p>
+                <h1 class="text-lg font-bold tracking-tight">Signals</h1>
+                <p class="text-[10px] text-muted uppercase tracking-widest">NIFTY + BANK NIFTY</p>
             </div>
         </div>
         <div class="text-right">
@@ -114,6 +119,16 @@
         </div>
         <p id="day-sub" class="text-xs text-muted mt-0.5">Loading…</p>
     </section>
+
+    <!-- Symbol toggle -->
+    <div class="mb-3 flex gap-2">
+        <button data-symbol="NIFTY"     id="sym-NIFTY"     class="symbol-btn flex-1 rounded-xl px-3 py-2 text-xs font-semibold border transition">NIFTY</button>
+        <button data-symbol="BANKNIFTY" id="sym-BANKNIFTY" class="symbol-btn flex-1 rounded-xl px-3 py-2 text-xs font-semibold border transition">BANK NIFTY</button>
+    </div>
+    <style>
+        .symbol-btn { background: white; color: #6B7280; border-color: #FCE7F3; }
+        .symbol-btn.active { background: #FCE7F3; color: #BE185D; border-color: #FBCFE8; }
+    </style>
 
     <!-- Day summary card -->
     <section class="card px-5 py-4 mb-3 animate-fade-in">
@@ -147,11 +162,20 @@
         </div>
     </section>
 
-    <!-- Timeline title -->
+    <!-- Timeline title + view toggle -->
     <div class="flex items-center justify-between mb-2 px-1">
-        <h3 class="text-xs font-semibold text-muted uppercase tracking-widest">Timeline</h3>
-        <span class="text-[10px] text-muted">10-min cadence · newest first</span>
+        <h3 class="text-xs font-semibold text-muted uppercase tracking-widest">
+            <span id="timeline-title">Notifications</span>
+        </h3>
+        <div class="flex items-center gap-2 text-[10px]">
+            <button id="view-notifs" class="view-btn px-2 py-0.5 rounded-md font-semibold transition">Notifs</button>
+            <button id="view-all" class="view-btn px-2 py-0.5 rounded-md font-semibold transition">All snaps</button>
+        </div>
     </div>
+    <style>
+        .view-btn { background: transparent; color: #6B7280; border: 1px solid transparent; }
+        .view-btn.active { background: #FCE7F3; color: #BE185D; border-color: #FBCFE8; }
+    </style>
 
     <!-- Timeline list (skeleton initially) -->
     <section id="timeline" class="space-y-2">

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#FDF2F8">
-    <title>NIFTY · History</title>
+    <title>History</title>
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -82,8 +82,8 @@
                 <span class="text-blush-600 text-base">💗</span>
             </div>
             <div>
-                <h1 class="text-lg font-bold tracking-tight">NIFTY Signals</h1>
-                <p class="text-[10px] text-muted uppercase tracking-widest">For Bestie 💕</p>
+                <h1 class="text-lg font-bold tracking-tight">Signals</h1>
+                <p class="text-[10px] text-muted uppercase tracking-widest">NIFTY + BANK NIFTY</p>
             </div>
         </div>
         <div class="text-right">
@@ -107,6 +107,16 @@
         <h2 class="text-xl font-extrabold tracking-tight">History</h2>
         <p class="text-xs text-muted mt-0.5">Recent trading days · tap a day to see its full timeline</p>
     </section>
+
+    <!-- Symbol toggle -->
+    <div class="mb-3 flex gap-2">
+        <button data-symbol="NIFTY"     id="sym-NIFTY"     class="symbol-btn flex-1 rounded-xl px-3 py-2 text-xs font-semibold border transition">NIFTY</button>
+        <button data-symbol="BANKNIFTY" id="sym-BANKNIFTY" class="symbol-btn flex-1 rounded-xl px-3 py-2 text-xs font-semibold border transition">BANK NIFTY</button>
+    </div>
+    <style>
+        .symbol-btn { background: white; color: #6B7280; border-color: #FCE7F3; }
+        .symbol-btn.active { background: #FCE7F3; color: #BE185D; border-color: #FBCFE8; }
+    </style>
 
     <!-- Rollup card -->
     <section class="card px-5 py-4 mb-4 animate-fade-in">

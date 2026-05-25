@@ -15,11 +15,47 @@
         : NSE.todayDateIST();
     const isToday = date === NSE.todayDateIST();
 
+    // ─── Symbol selection ─────────────────────────────────────────────
+    // Persist last-selected symbol in localStorage so it sticks across navigations
+    let symbol = (params.get("symbol") || localStorage.getItem("signals_symbol") || "NIFTY").toUpperCase();
+    if (!NSE.SYMBOLS.includes(symbol)) symbol = "NIFTY";
+    function selectSymbol(s) {
+        symbol = s;
+        localStorage.setItem("signals_symbol", s);
+        // Toggle button visual state
+        document.querySelectorAll(".symbol-btn").forEach(b => {
+            b.classList.toggle("active", b.getAttribute("data-symbol") === s);
+        });
+        refresh();
+    }
+    document.querySelectorAll(".symbol-btn").forEach(b => {
+        b.addEventListener("click", () => selectSymbol(b.getAttribute("data-symbol")));
+        b.classList.toggle("active", b.getAttribute("data-symbol") === symbol);
+    });
+
+    // ─── Timeline view mode (notifications-only by default) ──────────
+    let viewMode = localStorage.getItem("signals_view_mode") || "notifs";  // "notifs" | "all"
+    if (!["notifs", "all"].includes(viewMode)) viewMode = "notifs";
+    function selectView(mode) {
+        viewMode = mode;
+        localStorage.setItem("signals_view_mode", mode);
+        document.querySelectorAll(".view-btn").forEach(b => {
+            b.classList.toggle("active", b.id === `view-${mode}`);
+        });
+        // Re-render with currently loaded data (no need to refetch)
+        if (window.__day && window.__day.lastSnaps) renderTimeline(window.__day.lastSnaps);
+    }
+    document.getElementById("view-notifs").addEventListener("click", () => selectView("notifs"));
+    document.getElementById("view-all").addEventListener("click", () => selectView("all"));
+    document.querySelectorAll(".view-btn").forEach(b => {
+        b.classList.toggle("active", b.id === `view-${viewMode}`);
+    });
+
     // ─── Header chrome ────────────────────────────────────────────────
     NSE.markActiveNav(isToday ? "today" : "history");
     $("day-title").textContent = isToday ? "Today" : NSE.fmtDateLong(date);
     $("day-date").textContent = date;
-    document.title = `NIFTY · ${isToday ? "Today" : NSE.fmtDateLong(date)}`;
+    document.title = `${isToday ? "Today" : NSE.fmtDateLong(date)} - Signals`;
 
     // ─── Clock + market-status ────────────────────────────────────────
     function renderClock() {
@@ -56,7 +92,7 @@
         const move  = last - first;
         const movePct = (move / first) * 100;
         const nonNeutral = snaps.filter(s => s.signal !== "NEUTRAL").length;
-        const r = NSE.simulateDay(snaps);
+        const r = NSE.simulateDay(snaps, symbol);
 
         $("day-sub").textContent = `${snaps.length} snapshots · session ${NSE.fmtSpot(snaps[0].spot_open || first)} → ${NSE.fmtSpot(last)}`;
         $("sum-open").textContent = NSE.fmtSpot(snaps[0].spot_open || first);
@@ -82,12 +118,18 @@
     }
 
     // ─── Timeline list ────────────────────────────────────────────────
-    function rowHtml(s) {
+    function rowHtml(s, isNotif) {
         const tier = s.signal === "NEUTRAL" ? null : NSE.tierOf(s);
         const tierClass = tier ? "tier-" + (tier === "GREEN" ? "green" : tier === "YELLOW" ? "amber" : "rose") : "";
+        const notifClass = isNotif ? " is-notif" : "";
         const sigBadge = s.signal === "NEUTRAL"
             ? '<span class="pill pill-grey">⏸ neutral</span>'
             : `<span class="pill ${NSE.tierPillClass(tier)}">${s.signal === "PUT" ? "📉 PUT" : "📈 CALL"} · ${tier}</span>`;
+        // Bell icon prefix for notification rows. In All-snaps view this is the
+        // ONLY way to spot which row triggered a phone push at a glance.
+        const notifIcon = isNotif
+            ? '<span title="Notification fired (signal transition)" class="text-blush-600 text-xs font-bold">🔔</span>'
+            : '<span class="inline-block w-3"></span>';
         const time = NSE.fmtTime(s.ts);
         const spot = NSE.fmtSpot(s.spot_price);
         const score = (s.score != null) ? Number(s.score).toFixed(2) : "—";
@@ -96,9 +138,10 @@
             ? `<p class="text-[11px] text-muted mt-1 leading-snug">${escapeHtml(reasons[0])}</p>`
             : "";
         return `
-            <div class="card snap-row ${tierClass} px-4 py-3">
+            <div class="card snap-row ${tierClass}${notifClass} px-4 py-3">
                 <div class="flex items-center justify-between mb-0.5">
                     <div class="flex items-center gap-2">
+                        ${notifIcon}
                         <span class="text-sm font-semibold stat-mono">${time}</span>
                         <span class="text-sm font-mono text-ink stat-mono">${spot}</span>
                     </div>
@@ -122,21 +165,54 @@
             ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     }
 
+    // Tag each snap with whether it was a notification (signal transition).
+    // Walks chronologically so prev_signal is correctly the immediately prior snap.
+    function tagNotifications(snaps) {
+        const out = [];
+        let prev = "";
+        for (const s of snaps) {
+            const sig = s.signal || "NEUTRAL";
+            const isNotif = (sig === "CALL" || sig === "PUT") && prev !== sig;
+            out.push({ snap: s, isNotif });
+            prev = sig;
+        }
+        return out;
+    }
+
     function renderTimeline(snaps) {
         const el = $("timeline");
         if (!snaps.length) {
             el.innerHTML = `<div class="card px-4 py-6 text-center text-sm text-muted">No snapshots recorded.</div>`;
             return;
         }
+
+        const tagged = tagNotifications(snaps);
+        const notifCount = tagged.filter(t => t.isNotif).length;
+        const filtered = viewMode === "notifs" ? tagged.filter(t => t.isNotif) : tagged;
+
+        $("timeline-title").textContent = viewMode === "notifs"
+            ? `Notifications (${notifCount})`
+            : `All snapshots (${tagged.length}) · 🔔 ${notifCount} notified`;
+
+        if (filtered.length === 0) {
+            const msg = viewMode === "notifs"
+                ? `No notifications fired for ${symbol} today. Engine stayed NEUTRAL — no entry signal.`
+                : "No snapshots recorded.";
+            el.innerHTML = `<div class="card px-4 py-6 text-center text-sm text-muted">${msg}</div>`;
+            return;
+        }
         // Newest first for scanning
-        const reversed = [...snaps].reverse();
-        el.innerHTML = reversed.map(rowHtml).join("");
+        const reversed = [...filtered].reverse();
+        el.innerHTML = reversed.map(t => rowHtml(t.snap, t.isNotif)).join("");
     }
 
     // ─── Refresh loop (only when showing TODAY) ───────────────────────
     async function refresh() {
         renderClock();
-        const snaps = await NSE.fetchDay(date);
+        const snaps = await NSE.fetchDay(date, symbol);
+        // Cache so view toggle can re-render without a fetch
+        if (!window.__day) window.__day = {};
+        window.__day.lastSnaps = snaps;
         renderSummary(snaps);
         renderTimeline(snaps);
     }
