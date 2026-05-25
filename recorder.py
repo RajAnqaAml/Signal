@@ -67,36 +67,64 @@ def _previous_signal(symbol: str) -> str:
     return ""
 
 
-def _last_same_direction_push_age_min(symbol: str, direction: str):
-    """Find the most recent snapshot with the same direction in the last
-    NOTIFY_COOLDOWN_MIN minutes. Returns minutes-ago of that snap, or None if no
-    such snap. We treat any same-direction snap within the window as evidence
-    that a previous push already alerted on this trend — even through brief
-    NEUTRAL gaps.
+def _last_push_age_min(symbol: str, direction: str):
+    """Find when the most recent PUSH for this symbol+direction actually fired.
+    A 'push moment' is a snapshot where signal == direction AND the immediately
+    preceding snapshot had a DIFFERENT signal (i.e., the moment the engine flipped
+    INTO this direction). We need to walk the snapshot sequence to detect this.
+
+    Returns minutes-ago of the most recent push (excluding the snap just written),
+    or None if there's no prior same-direction push in the lookback window.
+
+    Why this is better than the previous logic:
+      The old function checked "any same-direction snap in last 30 min" -- which
+      meant a continuous 3-hour CALL streak that briefly flickered to NEUTRAL
+      and came back to CALL would be SUPPRESSED because a same-direction snap
+      existed 5 min ago. But that suppression hides a legitimate re-entry
+      transition. We saw this on 2026-05-25 BANKNIFTY: 3-hour CALL streak ->
+      NEUTRAL for 1 snap -> CALL again at 12:10. The re-entry push got
+      suppressed, which the user wanted to receive.
+
+      The new function only suppresses if a *transition* (NEUTRAL/PUT -> CALL
+      or NEUTRAL/CALL -> PUT) happened within the cooldown. Continuations
+      don't count toward cooldown.
     """
     if _db is None or not _db.is_configured():
         return None
     cli = _db.client(service=False) or _db.client(service=True)
     if cli is None:
         return None
-    cutoff = datetime.now(tz=IST) - timedelta(minutes=NOTIFY_COOLDOWN_MIN)
     try:
+        # Pull last ~40 snaps -- enough to span ~3h at 5-min cadence so we don't
+        # miss recent transitions even after a long continuation streak.
         resp = (
             cli.table("snapshots")
             .select("ts,signal")
             .eq("symbol", symbol)
-            .eq("signal", direction)
-            .gte("ts", cutoff.isoformat())
             .order("ts", desc=True)
-            .limit(2)
+            .limit(40)
             .execute()
         )
         rows = resp.data or []
-        # rows[0] is the one we just wrote (same direction); look at rows[1]
-        if len(rows) >= 2:
-            prior_ts = datetime.fromisoformat(rows[1]["ts"])
-            age_min = (datetime.now(tz=IST) - prior_ts).total_seconds() / 60
-            return age_min
+        if len(rows) < 3:
+            return None
+
+        # Order chronologically and exclude the most recent snap (the one we
+        # just wrote -- which is itself a transition we're evaluating).
+        rows_chrono = list(reversed(rows))[:-1]
+
+        # Find the most recent transition INTO `direction`
+        last_transition_ts = None
+        for i in range(1, len(rows_chrono)):
+            cur = rows_chrono[i].get("signal")
+            prev = rows_chrono[i - 1].get("signal")
+            if cur == direction and prev != direction:
+                last_transition_ts = datetime.fromisoformat(rows_chrono[i]["ts"])
+
+        if last_transition_ts is None:
+            return None
+        age_min = (datetime.now(tz=IST) - last_transition_ts).total_seconds() / 60
+        return age_min
     except Exception:
         pass
     return None
@@ -107,10 +135,12 @@ def _maybe_notify(symbol: str, sig_block: dict):
     Gates (ALL must be true):
       1. signal is CALL or PUT (not NEUTRAL)
       2. previous snapshot was different signal (transition, not continuation)
-      3. no same-direction push within the last NOTIFY_COOLDOWN_MIN minutes
-         (prevents re-alerts on a continuing trend that briefly flickered to
-         NEUTRAL — Thursday 2026-05-21 produced 3 PUT pushes that were really
-         the same trade because of this)
+      3. no PRIOR PUSH for this direction within NOTIFY_COOLDOWN_MIN minutes
+         (Thursday 2026-05-21 produced 3 PUT pushes within 70 min that were
+         really the same trade through brief NEUTRAL flickers -- cooldown
+         prevents that spam. But a re-entry AFTER a long, continuous streak
+         like Monday 2026-05-25 BANKNIFTY's 3-hour CALL run is a legitimate
+         new signal and should fire.)
     """
     if _notify is None or not _notify.is_configured():
         return
@@ -121,12 +151,12 @@ def _maybe_notify(symbol: str, sig_block: dict):
     if prev == direction:
         return  # continuation, silent
 
-    # Cooldown check: even if this is a fresh transition, suppress if we already
-    # pushed in this direction within the cooldown window
-    age = _last_same_direction_push_age_min(symbol, direction)
+    # Cooldown check: was there a same-direction PUSH (i.e., a transition
+    # snap, not just a same-signal snap) within the last NOTIFY_COOLDOWN_MIN?
+    age = _last_push_age_min(symbol, direction)
     if age is not None and age <= NOTIFY_COOLDOWN_MIN:
         print(
-            f"[notify] {symbol} {direction} suppressed: same-direction push "
+            f"[notify] {symbol} {direction} suppressed: prior push fired "
             f"{age:.1f} min ago (cooldown {NOTIFY_COOLDOWN_MIN} min)",
             flush=True,
         )
