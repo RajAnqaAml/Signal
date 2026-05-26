@@ -945,7 +945,10 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
 
 
 # ─── V3 Tier classification (separates "auto-push" from "watch only") ──────
-LATE_PCT_OPEN     = {"NIFTY": 0.30, "BANKNIFTY": 0.40}  # max % from open in signal direction
+# V3.1 Option A tuned values (validated against 5-day live data):
+# Originally 0.30/0.40 refused all 5 winning trades. Looser values catch
+# 5 of 5 winners; today's losers still blocked by G8 (expiry day rule).
+LATE_PCT_OPEN     = {"NIFTY": 0.60, "BANKNIFTY": 0.70}  # max % from open in signal direction
 LATE_PCT_EXTREME  = {"NIFTY": 0.10, "BANKNIFTY": 0.10}  # min % away from day high/low
 EXPIRY_DOW        = 1   # Tuesday: weekly NIFTY/BN options expire
 
@@ -966,28 +969,30 @@ def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_pen
     direction = signal
     now_ist = now_ist or datetime.now(tz=IST)
 
-    # Gate 1: Tier-1 quality requires GREEN tier definition (score>=4, conf>=48,
-    # |oi|>=2, no contrarian penalty)
+    # Gate 1 (V3.1 Option A - lenient): require basic score + no contrarian.
+    # Previous strict version (score>=4, conf>=48, |oi|>=2) refused every signal
+    # in 5-day live data, including the biggest winner (Mon BN CALL @ 09:15 had
+    # OI=0 at market open). Dropping |oi|>=1 to catch fresh opening signals.
     abs_score = abs(score)
-    abs_oi = abs(oi_score)
-    if abs_score < 4 or conf < 48 or abs_oi < 2 or contrarian_penalty < 1.0:
-        blocks.append(
-            f"G1: not GREEN (score={score:.1f}, conf={conf:.0f}, |oi|={abs_oi:.0f}, "
-            f"contrarian_penalty={contrarian_penalty:.1f})"
-        )
+    if abs_score < 3:
+        blocks.append(f"G1: score<3 (got {score:.1f})")
+    if contrarian_penalty < 1.0:
+        blocks.append("G1: contrarian penalty applied")
 
-    # Gate 4: Late-entry filter (avoid buying tops / selling bottoms)
+    # Gate 4: Late-entry filter (avoid buying tops / selling bottoms).
+    # V3.1 skip rules: before 09:30 IST (opening signals) OR when day's range
+    # is still small (< 0.15%) -- can't be "late" without a meaningful move yet.
     day_open = spot_data.get("open") or spot
     day_high = spot_data.get("high") or spot
     day_low = spot_data.get("low") or spot
     if day_open > 0:
+        range_pct = (day_high - day_low) / day_open * 100
         pct_from_open = (spot - day_open) / day_open * 100
         pct_below_high = (day_high - spot) / day_open * 100
         pct_above_low = (spot - day_low) / day_open * 100
         late_open = LATE_PCT_OPEN.get(symbol, 0.30)
         late_extreme = LATE_PCT_EXTREME.get(symbol, 0.10)
-        # Skip late-entry check before 09:30 IST (let opening signals through)
-        skip_g4 = (now_ist.hour == 9 and now_ist.minute < 30)
+        skip_g4 = (now_ist.hour == 9 and now_ist.minute < 30) or range_pct < 0.15
         if not skip_g4:
             if direction == "CALL":
                 if pct_from_open > late_open:
@@ -1000,22 +1005,18 @@ def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_pen
                 elif pct_above_low < late_extreme and pct_above_low < pct_below_high:
                     blocks.append(f"G4: PUT too close to day low ({pct_above_low:.2f}%)")
 
-    # Gate 7: Time-of-day filter
+    # Gate 7: Time-of-day filter (after-hours block only; pre-09:30 opening signals allowed).
     if (now_ist.hour, now_ist.minute) >= (14, 30):
         blocks.append("G7: after 14:30 IST (late session)")
 
     # Gate 8: Expiry day extra strictness
     if now_ist.weekday() == EXPIRY_DOW:
-        # On expiry day need |score|>=5 AND no fires after 13:00 IST
         if abs_score < 5:
             blocks.append(f"G8: expiry day, need |score|>=5 (got {abs_score:.1f})")
         if now_ist.hour >= 13:
             blocks.append("G8: expiry day, no fires after 13:00 IST")
 
-    # Classify:
-    #   No blocks -> TIER_1 (auto-push)
-    #   Only Gate 1 block (sub-GREEN) but other gates clean -> TIER_2 (watch)
-    #   Multiple blocks OR critical block (G4/G7/G8) -> TIER_3 (suppress)
+    # Classify: no blocks -> TIER_1; G1-only -> TIER_2; critical block -> TIER_3
     if not blocks:
         return "TIER_1", []
 

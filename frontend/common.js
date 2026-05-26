@@ -102,7 +102,8 @@
     // V3 push-tier classifier: ports app.py:_classify_v3_tier so dashboard
     // knows whether a fired signal would have been auto-pushed (TIER_1) or
     // dashboard-only "watch" (TIER_2).
-    const LATE_PCT_OPEN_V3 = { NIFTY: 0.30, BANKNIFTY: 0.40 };
+    // V3.1 Option A tuned values - keep in sync with app.py
+    const LATE_PCT_OPEN_V3 = { NIFTY: 0.60, BANKNIFTY: 0.70 };
     const LATE_PCT_EXTREME_V3 = { NIFTY: 0.10, BANKNIFTY: 0.10 };
     const EXPIRY_DOW_V3 = 2;  // JS Date.getDay() Tuesday = 2
 
@@ -118,10 +119,10 @@
         const contrarian = reasons.some(r => r && (r.includes("Contrarian") || r.includes("Sharp")));
 
         const blocks = [];
-        // Gate 1: GREEN tier required for Tier 1
-        if (absScore < 4 || conf < 48 || absOi < 2 || contrarian) {
-            blocks.push("G1");
-        }
+        // Gate 1 (V3.1 Option A): lenient -- score>=3 AND no contrarian
+        // (OI requirement dropped to catch fresh opening signals like Mon's BN CALL)
+        if (absScore < 3) blocks.push("G1");
+        if (contrarian) blocks.push("G1");
 
         // Gate 4: late-entry
         const dayOpen = Number(row.spot_open) || Number(row.spot_price) || 0;
@@ -129,7 +130,8 @@
         const dayLow = Number(row.spot_low) || dayOpen;
         const spot = Number(row.spot_price) || 0;
         const tsIST = new Date(new Date(row.ts).getTime() + 5.5 * 3600 * 1000);
-        const skipG4 = (tsIST.getUTCHours() === 9 && tsIST.getUTCMinutes() < 30);
+        const rangePct = dayOpen > 0 ? (dayHigh - dayLow) / dayOpen * 100 : 0;
+        const skipG4 = (tsIST.getUTCHours() === 9 && tsIST.getUTCMinutes() < 30) || rangePct < 0.15;
         if (!skipG4 && dayOpen > 0) {
             const pctFromOpen = (spot - dayOpen) / dayOpen * 100;
             const pctBelowHigh = (dayHigh - spot) / dayOpen * 100;
