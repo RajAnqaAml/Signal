@@ -124,14 +124,16 @@ def send_signal_alert(symbol: str, signal_row: dict) -> bool:
     icon = "[PUT]" if direction == "PUT" else "[CALL]"
     title = f"{icon} {symbol}: BUY {option}"
 
-    # Body — compact, scannable
+    # Body — compact, scannable. NOTE: removed "exit in 10 min" line because
+    # engine signals routinely sustain conviction for HOURS (Mon BN ran 5+ hrs).
+    # Exit guidance now follows the engine state, not a fixed time cap.
     body = [
         f"Spot:    {spot:.2f}",
         f"Buy:     {option}  (ATM weekly, {lot}-share lot)",
         "",
         f"Target:  spot {target_spot:.0f}  ({direction == 'PUT' and '-' or '+'}{target_pts} pts)  ≈ +Rs {target_inr}",
         f"Stop:    spot {sl_spot:.0f}  ({direction == 'PUT' and '+' or '-'}{sl_pts} pts)  ≈ -Rs {sl_inr}",
-        f"Time:    exit in 10 min if neither hits",
+        "Exit:    HOLD while engine stays {dir}. Exit when engine flips to NEUTRAL/opposite.".format(dir=direction),
         "",
         f"Score: {score:+.2f}  Conf: {conf:.0f}%  Tier: {tier}",
         "",
@@ -148,6 +150,45 @@ def send_signal_alert(symbol: str, signal_row: dict) -> bool:
     priority = "high"
     tags = ["chart_with_downwards_trend"] if direction == "PUT" else ["chart_with_upwards_trend"]
     return _post(url, title, body_text, priority=priority, tags=tags)
+
+
+def send_exit_alert(symbol: str, prior_direction: str, current_state: str,
+                     entry_spot: float = None, current_spot: float = None,
+                     held_min: int = None) -> bool:
+    """Push EXIT alert when engine flips OUT of an active direction.
+    Different from send_signal_alert (which is for ENTRY). This is the
+    'time to close the trade' notification.
+
+    prior_direction: 'CALL' or 'PUT' (what the active trade was)
+    current_state:   'NEUTRAL' or the opposite direction (what engine says now)
+    """
+    url = _topic_url()
+    if not url:
+        return False
+
+    title = f"[EXIT] {symbol} {prior_direction} — engine flipped to {current_state}"
+    body_lines = [
+        f"Engine has lost {prior_direction} conviction.",
+        f"Active trade direction (if you took it): {prior_direction}",
+        f"Engine now signaling: {current_state}",
+        "",
+    ]
+    if entry_spot is not None and current_spot is not None:
+        sign = 1 if prior_direction == "CALL" else -1
+        delta = (current_spot - entry_spot) * sign
+        body_lines.append(f"Entry spot:   {entry_spot:.2f}")
+        body_lines.append(f"Current spot: {current_spot:.2f}")
+        body_lines.append(f"P&L delta:    {delta:+.1f} pts")
+        if held_min is not None:
+            body_lines.append(f"Held:         {held_min} min")
+        body_lines.append("")
+    body_lines.append("Action: close the position. Engine state has changed.")
+
+    return _post(
+        url, title, "\n".join(body_lines),
+        priority="high",
+        tags=["x" if current_state == "NEUTRAL" else "arrows_counterclockwise"],
+    )
 
 
 def send_info(title: str, message: str) -> bool:

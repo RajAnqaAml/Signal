@@ -98,6 +98,71 @@
         if (score >= 3 && conf >= 30 && !contrarian) return "YELLOW";
         return "RED";
     }
+
+    // V3 push-tier classifier: ports app.py:_classify_v3_tier so dashboard
+    // knows whether a fired signal would have been auto-pushed (TIER_1) or
+    // dashboard-only "watch" (TIER_2).
+    const LATE_PCT_OPEN_V3 = { NIFTY: 0.30, BANKNIFTY: 0.40 };
+    const LATE_PCT_EXTREME_V3 = { NIFTY: 0.10, BANKNIFTY: 0.10 };
+    const EXPIRY_DOW_V3 = 2;  // JS Date.getDay() Tuesday = 2
+
+    function pushTierOf(row, symbol = DEFAULT_SYMBOL) {
+        const sig = row.signal || "NEUTRAL";
+        if (sig === "NEUTRAL") return "TIER_3";
+
+        const score = Number(row.score) || 0;
+        const absScore = Math.abs(score);
+        const conf = Number(row.confidence) || 0;
+        const absOi = Math.abs(Number(row.oi_score) || 0);
+        const reasons = row.reasons || [];
+        const contrarian = reasons.some(r => r && (r.includes("Contrarian") || r.includes("Sharp")));
+
+        const blocks = [];
+        // Gate 1: GREEN tier required for Tier 1
+        if (absScore < 4 || conf < 48 || absOi < 2 || contrarian) {
+            blocks.push("G1");
+        }
+
+        // Gate 4: late-entry
+        const dayOpen = Number(row.spot_open) || Number(row.spot_price) || 0;
+        const dayHigh = Number(row.spot_high) || dayOpen;
+        const dayLow = Number(row.spot_low) || dayOpen;
+        const spot = Number(row.spot_price) || 0;
+        const tsIST = new Date(new Date(row.ts).getTime() + 5.5 * 3600 * 1000);
+        const skipG4 = (tsIST.getUTCHours() === 9 && tsIST.getUTCMinutes() < 30);
+        if (!skipG4 && dayOpen > 0) {
+            const pctFromOpen = (spot - dayOpen) / dayOpen * 100;
+            const pctBelowHigh = (dayHigh - spot) / dayOpen * 100;
+            const pctAboveLow = (spot - dayLow) / dayOpen * 100;
+            const lateOpen = LATE_PCT_OPEN_V3[symbol] || 0.30;
+            const lateExtreme = LATE_PCT_EXTREME_V3[symbol] || 0.10;
+            if (sig === "CALL") {
+                if (pctFromOpen > lateOpen) blocks.push("G4");
+                else if (pctBelowHigh < lateExtreme && pctBelowHigh < pctAboveLow) blocks.push("G4");
+            } else {
+                if (pctFromOpen < -lateOpen) blocks.push("G4");
+                else if (pctAboveLow < lateExtreme && pctAboveLow < pctBelowHigh) blocks.push("G4");
+            }
+        }
+
+        // Gate 7: after 14:30 IST late session
+        if (tsIST.getUTCHours() > 14 || (tsIST.getUTCHours() === 14 && tsIST.getUTCMinutes() >= 30)) {
+            blocks.push("G7");
+        }
+
+        // Gate 8: expiry day
+        if (tsIST.getUTCDay() === EXPIRY_DOW_V3) {
+            if (absScore < 5) blocks.push("G8");
+            if (tsIST.getUTCHours() >= 13) blocks.push("G8");
+        }
+
+        // Classify
+        if (blocks.length === 0) return "TIER_1";
+        const criticalGates = new Set(["G4", "G7", "G8"]);
+        const hasCritical = blocks.some(b => criticalGates.has(b));
+        if (hasCritical) return "TIER_3";
+        return "TIER_2";
+    }
     function recommendStrike(spot, symbol = DEFAULT_SYMBOL) {
         const step = cfg(symbol).step;
         return Math.round(Number(spot) / step) * step;
@@ -243,7 +308,7 @@
         // format
         fmtINR, fmtSpot, fmtPct,
         // engine
-        tierOf, recommendStrike, optionType, estINR, simulateDay, topReasons,
+        tierOf, pushTierOf, recommendStrike, optionType, estINR, simulateDay, topReasons,
         // ui
         tierPillClass, tierStripeClass, signalEmoji, markActiveNav,
         // data

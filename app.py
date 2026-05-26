@@ -915,6 +915,17 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
         stop_loss = 0
         reasons.append(f"Score {score:+.2f} below threshold (|3| required) — no trade")
 
+    # ── V3 GATES: classify signal into push_tier ──────────────────────────
+    # tier classifies WHAT KIND of signal this is:
+    #   "TIER_1" -> high conviction, push to phone, real-money tradeable
+    #   "TIER_2" -> moderate, dashboard WATCH only, no phone push
+    #   "TIER_3" -> sub-threshold OR refused by V3 gates, no action
+    # The gate list explains why a signal didn't make Tier 1 if applicable.
+    push_tier, tier_blocks = _classify_v3_tier(
+        signal, score, confidence, oi_score, trend_score, contrarian_penalty,
+        spot, spot_data, symbol, now_ist, reasons
+    )
+
     return {
         "signal": signal,
         "confidence": round(confidence, 1),
@@ -928,7 +939,91 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
         "target2": target2,
         "stop_loss": stop_loss,
         "evidence_quality": "full" if history_source == "real" else "flow-only",
+        "push_tier": push_tier,        # "TIER_1" / "TIER_2" / "TIER_3"
+        "tier_blocks": tier_blocks,    # list of V3 gates the signal failed
     }
+
+
+# ─── V3 Tier classification (separates "auto-push" from "watch only") ──────
+LATE_PCT_OPEN     = {"NIFTY": 0.30, "BANKNIFTY": 0.40}  # max % from open in signal direction
+LATE_PCT_EXTREME  = {"NIFTY": 0.10, "BANKNIFTY": 0.10}  # min % away from day high/low
+EXPIRY_DOW        = 1   # Tuesday: weekly NIFTY/BN options expire
+
+
+def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_penalty,
+                       spot, spot_data, symbol, now_ist, reasons):
+    """Run V3 gates to classify a fired signal.
+    Returns ("TIER_1" | "TIER_2" | "TIER_3", list_of_block_reasons).
+
+    Tier 1 (auto-push):  GREEN tier + all gates pass.
+    Tier 2 (watch only): non-NEUTRAL signal that failed one+ Tier-1 gates.
+    Tier 3 (suppressed): NEUTRAL OR signals that failed Gate 1 quality bar.
+    """
+    blocks = []
+    if signal == "NEUTRAL":
+        return "TIER_3", ["signal=NEUTRAL"]
+
+    direction = signal
+    now_ist = now_ist or datetime.now(tz=IST)
+
+    # Gate 1: Tier-1 quality requires GREEN tier definition (score>=4, conf>=48,
+    # |oi|>=2, no contrarian penalty)
+    abs_score = abs(score)
+    abs_oi = abs(oi_score)
+    if abs_score < 4 or conf < 48 or abs_oi < 2 or contrarian_penalty < 1.0:
+        blocks.append(
+            f"G1: not GREEN (score={score:.1f}, conf={conf:.0f}, |oi|={abs_oi:.0f}, "
+            f"contrarian_penalty={contrarian_penalty:.1f})"
+        )
+
+    # Gate 4: Late-entry filter (avoid buying tops / selling bottoms)
+    day_open = spot_data.get("open") or spot
+    day_high = spot_data.get("high") or spot
+    day_low = spot_data.get("low") or spot
+    if day_open > 0:
+        pct_from_open = (spot - day_open) / day_open * 100
+        pct_below_high = (day_high - spot) / day_open * 100
+        pct_above_low = (spot - day_low) / day_open * 100
+        late_open = LATE_PCT_OPEN.get(symbol, 0.30)
+        late_extreme = LATE_PCT_EXTREME.get(symbol, 0.10)
+        # Skip late-entry check before 09:30 IST (let opening signals through)
+        skip_g4 = (now_ist.hour == 9 and now_ist.minute < 30)
+        if not skip_g4:
+            if direction == "CALL":
+                if pct_from_open > late_open:
+                    blocks.append(f"G4: CALL too late ({pct_from_open:.2f}% > {late_open}% above open)")
+                elif pct_below_high < late_extreme and pct_below_high < pct_above_low:
+                    blocks.append(f"G4: CALL too close to day high ({pct_below_high:.2f}%)")
+            else:  # PUT
+                if pct_from_open < -late_open:
+                    blocks.append(f"G4: PUT too late ({pct_from_open:.2f}% < -{late_open}% below open)")
+                elif pct_above_low < late_extreme and pct_above_low < pct_below_high:
+                    blocks.append(f"G4: PUT too close to day low ({pct_above_low:.2f}%)")
+
+    # Gate 7: Time-of-day filter
+    if (now_ist.hour, now_ist.minute) >= (14, 30):
+        blocks.append("G7: after 14:30 IST (late session)")
+
+    # Gate 8: Expiry day extra strictness
+    if now_ist.weekday() == EXPIRY_DOW:
+        # On expiry day need |score|>=5 AND no fires after 13:00 IST
+        if abs_score < 5:
+            blocks.append(f"G8: expiry day, need |score|>=5 (got {abs_score:.1f})")
+        if now_ist.hour >= 13:
+            blocks.append("G8: expiry day, no fires after 13:00 IST")
+
+    # Classify:
+    #   No blocks -> TIER_1 (auto-push)
+    #   Only Gate 1 block (sub-GREEN) but other gates clean -> TIER_2 (watch)
+    #   Multiple blocks OR critical block (G4/G7/G8) -> TIER_3 (suppress)
+    if not blocks:
+        return "TIER_1", []
+
+    critical_gates = {"G4", "G7", "G8"}
+    has_critical = any(any(g in b for g in critical_gates) for b in blocks)
+    if has_critical:
+        return "TIER_3", blocks
+    return "TIER_2", blocks
 
 
 # ─── Synthetic Price History ────────────────────────────────────────────────

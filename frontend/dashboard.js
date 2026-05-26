@@ -67,12 +67,24 @@
 
     function renderBuy(prefix, row, tier, symbol) {
         const cfg = NSE.cfg(symbol);
+        // V3: classify into Tier 1 (auto-push, BUY action) vs Tier 2 (WATCH only)
+        const pushTier = NSE.pushTierOf(row, symbol);
+        const isAutoPush = pushTier === "TIER_1";
+
         showHero(prefix);
-        setStripe(prefix, tier === "GREEN" ? "stripe-green" : "stripe-amber");
-        setTierPill(prefix,
-            tier === "GREEN" ? "🟢 GREEN · trade OK" : "🟡 YELLOW · paper only",
-            tier === "GREEN" ? "pill-green" : "pill-amber",
-        );
+
+        // Stripe + tier pill: Tier 1 -> green/amber based on quality; Tier 2 -> muted pink
+        if (isAutoPush) {
+            setStripe(prefix, tier === "GREEN" ? "stripe-green" : "stripe-amber");
+            setTierPill(prefix,
+                tier === "GREEN" ? "🟢 BUY · trade OK" : "🟡 BUY · paper only",
+                tier === "GREEN" ? "pill-green" : "pill-amber",
+            );
+        } else {
+            setStripe(prefix, "stripe-muted");
+            setTierPill(prefix, "👀 WATCH · low conviction", "pill-pink");
+        }
+
         el(prefix, "time").textContent = NSE.fmtTime(row.ts);
 
         const dir = row.signal;
@@ -82,8 +94,10 @@
         const targetSpot = dir === "PUT" ? spot - cfg.target : spot + cfg.target;
         const stopSpot   = dir === "PUT" ? spot + cfg.sl     : spot - cfg.sl;
 
-        el(prefix, "action").textContent = "Buy";
-        el(prefix, "instrument").textContent = `${cfg.label} ${strike} ${opt}`;
+        el(prefix, "action").textContent = isAutoPush ? "Buy" : "Watch";
+        el(prefix, "instrument").textContent = isAutoPush
+            ? `${cfg.label} ${strike} ${opt}`
+            : `${cfg.label} ${strike} ${opt} (manual decision)`;
 
         el(prefix, "levels").classList.remove("hidden");
         el(prefix, "spot").textContent = NSE.fmtSpot(spot);

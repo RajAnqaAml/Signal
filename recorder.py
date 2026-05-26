@@ -130,42 +130,113 @@ def _last_push_age_min(symbol: str, direction: str):
     return None
 
 
-def _maybe_notify(symbol: str, sig_block: dict):
+def _last_active_direction_entry(symbol: str, since_min: int = 240):
+    """Find the most recent ENTRY push (a transition from NEUTRAL or opposite
+    to CALL/PUT) within the last `since_min` minutes. Returns (direction,
+    entry_ts, entry_spot) or None.
+    Used to detect "exit moments" — when engine flips out of an active trade.
+    """
+    if _db is None or not _db.is_configured():
+        return None
+    cli = _db.client(service=False) or _db.client(service=True)
+    if cli is None:
+        return None
+    cutoff = datetime.now(tz=IST) - timedelta(minutes=since_min)
+    try:
+        resp = (
+            cli.table("snapshots")
+            .select("ts,signal,spot_price")
+            .eq("symbol", symbol)
+            .gte("ts", cutoff.isoformat())
+            .order("ts", desc=True)
+            .limit(60)
+            .execute()
+        )
+        rows = list(reversed(resp.data or []))
+        if len(rows) < 3:
+            return None
+        # Walk backward from most recent, find the most recent transition INTO
+        # a direction (i.e., signal[i] in {CALL,PUT} and signal[i-1] is different).
+        for i in range(len(rows) - 1, 0, -1):
+            cur = rows[i].get("signal")
+            prev = rows[i - 1].get("signal")
+            if cur in ("CALL", "PUT") and prev != cur:
+                return cur, datetime.fromisoformat(rows[i]["ts"]), rows[i]["spot_price"]
+        return None
+    except Exception:
+        return None
+
+
+def _maybe_notify(symbol: str, sig_block: dict, current_spot: float = None):
     """Decide whether to push a notification.
-    Gates (ALL must be true):
-      1. signal is CALL or PUT (not NEUTRAL)
-      2. previous snapshot was different signal (transition, not continuation)
-      3. no PRIOR PUSH for this direction within NOTIFY_COOLDOWN_MIN minutes
-         (Thursday 2026-05-21 produced 3 PUT pushes within 70 min that were
-         really the same trade through brief NEUTRAL flickers -- cooldown
-         prevents that spam. But a re-entry AFTER a long, continuous streak
-         like Monday 2026-05-25 BANKNIFTY's 3-hour CALL run is a legitimate
-         new signal and should fire.)
+
+    Three kinds of pushes:
+      A. ENTRY push: signal flips from NEUTRAL to CALL/PUT (transition).
+         Requires Tier 1 + cooldown + transition gate.
+      B. DIRECTION FLIP push: CALL->PUT or PUT->CALL. Always alert immediately.
+      C. EXIT push: signal flips from CALL/PUT to NEUTRAL after we had an
+         active trade. Tells user to close the position.
+
+    V3 changes vs prior version:
+      - Only push TIER_1 signals (Tier 2 = dashboard-only WATCH).
+      - Add exit notifications when engine flips back to NEUTRAL.
     """
     if _notify is None or not _notify.is_configured():
         return
+
     direction = sig_block.get("signal", "NEUTRAL")
-    if direction == "NEUTRAL":
-        return
     prev = _previous_signal(symbol)
+    push_tier = sig_block.get("push_tier", "TIER_3")
+    tier_blocks = sig_block.get("tier_blocks", [])
+
+    # ── EXIT PUSH: prev was CALL/PUT, current is NEUTRAL ─────────────
+    if direction == "NEUTRAL" and prev in ("CALL", "PUT"):
+        last_entry = _last_active_direction_entry(symbol)
+        if last_entry and last_entry[0] == prev:
+            entry_dir, entry_ts, entry_spot = last_entry
+            held_min = int((datetime.now(tz=IST) - entry_ts).total_seconds() / 60)
+            ok = _notify.send_exit_alert(
+                symbol, prior_direction=entry_dir, current_state="NEUTRAL",
+                entry_spot=entry_spot, current_spot=current_spot, held_min=held_min,
+            )
+            print(
+                f"[notify] {symbol} EXIT ({entry_dir} -> NEUTRAL after {held_min} min) "
+                f"-> {'sent' if ok else 'FAIL'}",
+                flush=True,
+            )
+        return
+
+    # ── ENTRY/FLIP push: only if signal is non-NEUTRAL ─────────────
+    if direction == "NEUTRAL":
+        return  # nothing to push for NEUTRAL with no prior trade
     if prev == direction:
         return  # continuation, silent
 
-    # Cooldown check: was there a same-direction PUSH (i.e., a transition
-    # snap, not just a same-signal snap) within the last NOTIFY_COOLDOWN_MIN?
-    age = _last_push_age_min(symbol, direction)
-    if age is not None and age <= NOTIFY_COOLDOWN_MIN:
+    # Tier gate: only TIER_1 signals push to phone (Tier 2 -> WATCH on dashboard).
+    if push_tier != "TIER_1":
         print(
-            f"[notify] {symbol} {direction} suppressed: prior push fired "
-            f"{age:.1f} min ago (cooldown {NOTIFY_COOLDOWN_MIN} min)",
+            f"[notify] {symbol} {direction} suppressed: push_tier={push_tier} "
+            f"(blocks: {'; '.join(tier_blocks[:2])})",
             flush=True,
         )
         return
 
-    # New entry or direction flip — alert
+    # Cooldown check: same-direction push fired within cooldown window?
+    # Direction flips bypass cooldown (CALL->PUT is always urgent).
+    if prev != ("PUT" if direction == "CALL" else "CALL"):
+        age = _last_push_age_min(symbol, direction)
+        if age is not None and age <= NOTIFY_COOLDOWN_MIN:
+            print(
+                f"[notify] {symbol} {direction} suppressed: prior push fired "
+                f"{age:.1f} min ago (cooldown {NOTIFY_COOLDOWN_MIN} min)",
+                flush=True,
+            )
+            return
+
+    # Fire entry push
     row_like = {**sig_block, "spot_price": sig_block.get("entry")}
     ok = _notify.send_signal_alert(symbol, row_like)
-    print(f"[notify] {symbol} {direction} (prev={prev or 'none'}) -> {'sent' if ok else 'FAIL'}", flush=True)
+    print(f"[notify] {symbol} {direction} TIER_1 (prev={prev or 'none'}) -> {'sent' if ok else 'FAIL'}", flush=True)
 
 SNAPSHOT_DIR = "snapshots"
 
@@ -212,18 +283,17 @@ def take_one(now, force=False):
         flush=True,
     )
 
-    # Push notifications for BOTH symbols. _maybe_notify enforces the
-    # transition gate + 30-min same-direction cooldown independently per
-    # symbol. BANKNIFTY was originally silenced; we re-enabled it after the
-    # 3-day data review showed BN notifications had 100% hit rate on +75 pts
-    # across 5 fires. notify.py already has BN-aware TARGET_PTS / SL_PTS /
-    # STRIKE_STEP / LOT_SIZE so the phone alert sizes correctly for BN.
+    # Push notifications for BOTH symbols. V3: only TIER_1 signals push to
+    # phone; TIER_2 surfaces on dashboard only. _maybe_notify also fires EXIT
+    # pushes when engine flips out of an active direction.
+    nifty_spot = payload["data"]["NIFTY"]["spot"]["price"]
+    bn_spot = payload["data"]["BANKNIFTY"]["spot"]["price"]
     try:
-        _maybe_notify("NIFTY", n)
+        _maybe_notify("NIFTY", n, current_spot=nifty_spot)
     except Exception as e:
         print(f"[notify] error: {e}", flush=True)
     try:
-        _maybe_notify("BANKNIFTY", b)
+        _maybe_notify("BANKNIFTY", b, current_spot=bn_spot)
     except Exception as e:
         print(f"[notify] error: {e}", flush=True)
 
