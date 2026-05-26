@@ -524,8 +524,26 @@ def analyze_option_chain(oc_data, spot, symbol="NIFTY", now_ist=None):
     pe_ivs = [strikes[k]["pe_iv"] for k in iv_band if k in strikes and strikes[k]["pe_iv"] > 0]
     iv_skew = round(np.mean(pe_ivs) - np.mean(ce_ivs), 2) if ce_ivs and pe_ivs else 0
 
+    # Determine if THIS contract expires today. NSE publishes expiryDates[0]
+    # as the nearest expiry; we just parse it. Format is "DD-MMM-YYYY"
+    # (e.g. "26-May-2026"). Handles weekly + monthly expiries + holiday
+    # shifts automatically — no hardcoded calendar required.
+    is_expiry_today = False
+    expiry_iso = None
+    try:
+        expiry_dt = datetime.strptime(nearest_expiry, "%d-%b-%Y").date()
+        expiry_iso = expiry_dt.isoformat()
+        today_ist = (now_ist or datetime.now(tz=IST)).date()
+        is_expiry_today = (expiry_dt == today_ist)
+    except (ValueError, TypeError):
+        # Unparseable expiry string -- leave is_expiry_today False; the
+        # _classify_v3_tier function will fall back to the weekday() check.
+        pass
+
     return {
         "expiry": nearest_expiry,
+        "expiry_iso": expiry_iso,
+        "is_expiry_today": is_expiry_today,
         "pcr_total": pcr_total,
         "pcr_change": pcr_change,
         "max_pain": max_pain,
@@ -923,7 +941,8 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
     # The gate list explains why a signal didn't make Tier 1 if applicable.
     push_tier, tier_blocks = _classify_v3_tier(
         signal, score, confidence, oi_score, trend_score, contrarian_penalty,
-        spot, spot_data, symbol, now_ist, reasons
+        spot, spot_data, symbol, now_ist, reasons,
+        oc_analysis=oc_analysis,
     )
 
     return {
@@ -954,13 +973,17 @@ EXPIRY_DOW        = 1   # Tuesday: weekly NIFTY/BN options expire
 
 
 def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_penalty,
-                       spot, spot_data, symbol, now_ist, reasons):
+                       spot, spot_data, symbol, now_ist, reasons, oc_analysis=None):
     """Run V3 gates to classify a fired signal.
     Returns ("TIER_1" | "TIER_2" | "TIER_3", list_of_block_reasons).
 
     Tier 1 (auto-push):  GREEN tier + all gates pass.
     Tier 2 (watch only): non-NEUTRAL signal that failed one+ Tier-1 gates.
     Tier 3 (suppressed): NEUTRAL OR signals that failed Gate 1 quality bar.
+
+    oc_analysis: optional option-chain analysis dict (from analyze_option_chain).
+                 If provided, uses its `is_expiry_today` flag (sourced from NSE's
+                 actual expiry calendar) instead of falling back to weekday check.
     """
     blocks = []
     if signal == "NEUTRAL":
@@ -1009,12 +1032,23 @@ def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_pen
     if (now_ist.hour, now_ist.minute) >= (14, 30):
         blocks.append("G7: after 14:30 IST (late session)")
 
-    # Gate 8: Expiry day extra strictness
-    if now_ist.weekday() == EXPIRY_DOW:
+    # Gate 8: Expiry day extra strictness.
+    # Primary source: NSE's option chain expiryDates[0] (via oc_analysis).
+    # Fallback: weekday() check if option chain is unavailable. The NSE source
+    # is authoritative -- handles holiday shifts, monthly expiry, per-symbol
+    # differences automatically. The fallback is a safety net for OC outages.
+    is_expiry_today = None
+    if oc_analysis is not None:
+        is_expiry_today = oc_analysis.get("is_expiry_today")
+    if is_expiry_today is None:
+        # OC unavailable (or expiry parse failed); fall back to hardcoded weekday
+        is_expiry_today = (now_ist.weekday() == EXPIRY_DOW)
+    if is_expiry_today:
+        expiry_label = (oc_analysis or {}).get("expiry") or "weekday-fallback"
         if abs_score < 5:
-            blocks.append(f"G8: expiry day, need |score|>=5 (got {abs_score:.1f})")
+            blocks.append(f"G8: expiry day {expiry_label}, need |score|>=5 (got {abs_score:.1f})")
         if now_ist.hour >= 13:
-            blocks.append("G8: expiry day, no fires after 13:00 IST")
+            blocks.append(f"G8: expiry day {expiry_label}, no fires after 13:00 IST")
 
     # Classify: no blocks -> TIER_1; G1-only -> TIER_2; critical block -> TIER_3
     if not blocks:
