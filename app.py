@@ -13,6 +13,12 @@ from flask_cors import CORS
 
 IST = ZoneInfo("Asia/Kolkata")
 
+try:
+    from bse_client import BSEClient
+    bse = BSEClient()
+except Exception:
+    bse = None
+
 
 def is_market_open(now=None):
     """NSE cash/F&O session: Mon-Fri 09:15-15:30 IST.
@@ -467,7 +473,7 @@ def analyze_option_chain(oc_data, spot, symbol="NIFTY", now_ist=None):
         return None
 
     nearest_expiry = expiries[0]
-    step = 50 if symbol == "NIFTY" else 100
+    step = 50 if symbol == "NIFTY" else 100  # BANKNIFTY and SENSEX both use 100
 
     strikes = {}  # strike -> {"ce_oi", "pe_oi", "ce_chg", "pe_chg", "ce_iv", "pe_iv"}
     for row in rows:
@@ -889,8 +895,9 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
     # design.
     ATR_FLOORS = {
         # symbol: (t1_floor, t2_floor, sl_floor)
-        "NIFTY":     (50,  100, 40),   # unchanged
-        "BANKNIFTY": (100, 200, 80),   # 2x NIFTY, matches strike-step ratio
+        "NIFTY":     (50,  100, 40),
+        "BANKNIFTY": (100, 200, 80),
+        "SENSEX":    (150, 300, 120),  # ~3x NIFTY, 80K spot level
     }
     t1_floor, t2_floor, sl_floor = ATR_FLOORS.get(symbol, (50, 100, 40))
     atr_val = (technicals or {}).get("atr")
@@ -967,9 +974,9 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
 # V3.1 Option A tuned values (validated against 5-day live data):
 # Originally 0.30/0.40 refused all 5 winning trades. Looser values catch
 # 5 of 5 winners; today's losers still blocked by G8 (expiry day rule).
-LATE_PCT_OPEN     = {"NIFTY": 0.60, "BANKNIFTY": 0.70}  # max % from open in signal direction
-LATE_PCT_EXTREME  = {"NIFTY": 0.10, "BANKNIFTY": 0.10}  # min % away from day high/low
-EXPIRY_DOW        = 1   # Tuesday: weekly NIFTY/BN options expire
+LATE_PCT_OPEN     = {"NIFTY": 0.60, "BANKNIFTY": 0.70, "SENSEX": 0.60}
+LATE_PCT_EXTREME  = {"NIFTY": 0.10, "BANKNIFTY": 0.10, "SENSEX": 0.10}
+EXPIRY_DOW        = {"NIFTY": 1, "BANKNIFTY": 1, "SENSEX": 3}  # Tue NSE, Thu BSE
 
 
 def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_penalty,
@@ -1028,6 +1035,17 @@ def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_pen
                 elif pct_above_low < late_extreme and pct_above_low < pct_below_high:
                     blocks.append(f"G4: PUT too close to day low ({pct_above_low:.2f}%)")
 
+    # Gate 11: Trend must confirm signal direction.
+    # Prevents pure-OI-driven fires where price isn't actually moving in signal dir.
+    # Wed 2026-05-27: BN fired CALL all day (OI=+2, VIX=+1 -> score=+3) but
+    # trend_score was 0 -- price wasn't rallying. BN closed RED (-45 from open).
+    # Two V3 pushes would have lost Rs 3,398. This gate: no CALL unless trend >= +1,
+    # no PUT unless trend <= -1.
+    if direction == "CALL" and trend_score < 1:
+        blocks.append(f"G11: CALL but trend not confirming (trend={trend_score:+.1f})")
+    elif direction == "PUT" and trend_score > -1:
+        blocks.append(f"G11: PUT but trend not confirming (trend={trend_score:+.1f})")
+
     # Gate 7: Time-of-day filter (after-hours block only; pre-09:30 opening signals allowed).
     if (now_ist.hour, now_ist.minute) >= (14, 30):
         blocks.append("G7: after 14:30 IST (late session)")
@@ -1042,7 +1060,7 @@ def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_pen
         is_expiry_today = oc_analysis.get("is_expiry_today")
     if is_expiry_today is None:
         # OC unavailable (or expiry parse failed); fall back to hardcoded weekday
-        is_expiry_today = (now_ist.weekday() == EXPIRY_DOW)
+        is_expiry_today = (now_ist.weekday() == EXPIRY_DOW.get(symbol, 1))
     if is_expiry_today:
         expiry_label = (oc_analysis or {}).get("expiry") or "weekday-fallback"
         if abs_score < 5:
@@ -1054,7 +1072,7 @@ def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_pen
     if not blocks:
         return "TIER_1", []
 
-    critical_gates = {"G4", "G7", "G8"}
+    critical_gates = {"G4", "G7", "G8", "G11"}
     has_critical = any(any(g in b for g in critical_gates) for b in blocks)
     if has_critical:
         return "TIER_3", blocks
@@ -1174,6 +1192,55 @@ def build_signals_payload(now_ist=None, verbose=True):
             "indicators": technicals,
             "signal": signal,
         }
+
+    # ── SENSEX (BSE) — isolated, failure-safe ──
+    if bse is not None:
+        try:
+            symbol = "SENSEX"
+            spot_data = bse.fetch_spot_price()
+            if spot_data and spot_data["price"] > 0:
+                oi_analysis = None  # BSE has no OI spurts endpoint
+                oc_data = bse.fetch_option_chain()
+                oc_analysis = analyze_option_chain(oc_data, spot_data["price"], symbol, now_ist) if oc_data else None
+
+                history_source = "synthetic"
+                highs, lows, closes, prices = build_price_history(spot_data)
+
+                atr_val = compute_atr(highs, lows, closes, period=14) if len(closes) >= 15 else None
+                technicals = {
+                    "rsi": compute_rsi(prices) if len(prices) > 0 else 50,
+                    "macd": compute_macd(prices) if len(prices) > 0 else {"macd": 0, "signal": 0, "histogram": 0},
+                    "ema9": compute_ema(prices, 9) if len(prices) > 0 else 0,
+                    "ema21": compute_ema(prices, 21) if len(prices) > 0 else 0,
+                    "supertrend": compute_supertrend(highs, lows, closes) if len(closes) > 0 else "NEUTRAL",
+                    "atr": atr_val,
+                    "history_source": history_source,
+                    "bars": int(len(closes)),
+                }
+
+                signal = generate_signal(
+                    spot_data, vix_data, oi_analysis, breadth, technicals,
+                    oc_analysis=oc_analysis, history_source=history_source, symbol=symbol,
+                    now_ist=now_ist,
+                )
+
+                if verbose:
+                    pcr = oc_analysis["pcr_total"] if oc_analysis else "N/A"
+                    print(f"[Signals] {symbol} spot={spot_data['price']} signal={signal['signal']}@{signal['confidence']}% PCR={pcr} hist={history_source}")
+
+                results[symbol] = {
+                    "spot": spot_data,
+                    "oi": oi_analysis,
+                    "option_chain": oc_analysis,
+                    "breadth": breadth,
+                    "indicators": technicals,
+                    "signal": signal,
+                }
+            elif verbose:
+                print("[Signals] SENSEX spot unavailable — skipping")
+        except Exception as e:
+            print(f"[Signals] SENSEX failed (skipping): {e}")
+            traceback.print_exc()
 
     return {
         "timestamp": now_ist.strftime("%Y-%m-%d %H:%M:%S %Z"),

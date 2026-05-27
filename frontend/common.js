@@ -6,13 +6,13 @@
 
     // ─── Constants (mirror notify.py / eod_report.py) ─────────────────
     const DEFAULT_SYMBOL = "NIFTY";
-    const SYMBOLS = ["NIFTY", "BANKNIFTY"];
+    const SYMBOLS = ["NIFTY", "BANKNIFTY", "SENSEX"];
 
-    // Per-symbol option-chain constants. BANKNIFTY has a different lot size,
-    // wider strike step, and the engine uses 2x targets/stops compared to NIFTY.
+    // Per-symbol option-chain constants.
     const SYMBOL_CONFIG = {
-        NIFTY:     { lot: 75, step: 50,  target: 30, sl: 15, label: "NIFTY"     },
-        BANKNIFTY: { lot: 15, step: 100, target: 60, sl: 30, label: "BANK NIFTY" },
+        NIFTY:     { lot: 75, step: 50,  target: 30,  sl: 15, label: "NIFTY"     },
+        BANKNIFTY: { lot: 15, step: 100, target: 60,  sl: 30, label: "BANK NIFTY" },
+        SENSEX:    { lot: 20, step: 100, target: 100, sl: 50, label: "SENSEX"    },
     };
 
     // Legacy aliases (keep until all callsites migrated)
@@ -103,9 +103,9 @@
     // knows whether a fired signal would have been auto-pushed (TIER_1) or
     // dashboard-only "watch" (TIER_2).
     // V3.1 Option A tuned values - keep in sync with app.py
-    const LATE_PCT_OPEN_V3 = { NIFTY: 0.60, BANKNIFTY: 0.70 };
-    const LATE_PCT_EXTREME_V3 = { NIFTY: 0.10, BANKNIFTY: 0.10 };
-    const EXPIRY_DOW_V3 = 2;  // JS Date.getDay() Tuesday = 2
+    const LATE_PCT_OPEN_V3 = { NIFTY: 0.60, BANKNIFTY: 0.70, SENSEX: 0.60 };
+    const LATE_PCT_EXTREME_V3 = { NIFTY: 0.10, BANKNIFTY: 0.10, SENSEX: 0.10 };
+    const EXPIRY_DOW_V3 = { NIFTY: 2, BANKNIFTY: 2, SENSEX: 4 };  // JS getDay(): Tue=2, Thu=4
 
     function pushTierOf(row, symbol = DEFAULT_SYMBOL) {
         const sig = row.signal || "NEUTRAL";
@@ -153,14 +153,19 @@
         }
 
         // Gate 8: expiry day
-        if (tsIST.getUTCDay() === EXPIRY_DOW_V3) {
+        if (tsIST.getUTCDay() === (EXPIRY_DOW_V3[symbol] || 2)) {
             if (absScore < 5) blocks.push("G8");
             if (tsIST.getUTCHours() >= 13) blocks.push("G8");
         }
 
+        // Gate 11: trend must confirm signal direction
+        const trendScore = Number(row.trend_score) || 0;
+        if (sig === "CALL" && trendScore < 1) blocks.push("G11");
+        else if (sig === "PUT" && trendScore > -1) blocks.push("G11");
+
         // Classify
         if (blocks.length === 0) return "TIER_1";
-        const criticalGates = new Set(["G4", "G7", "G8"]);
+        const criticalGates = new Set(["G4", "G7", "G8", "G11"]);
         const hasCritical = blocks.some(b => criticalGates.has(b));
         if (hasCritical) return "TIER_3";
         return "TIER_2";
