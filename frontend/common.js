@@ -121,7 +121,7 @@
         const blocks = [];
         // Gate 1 (V3.1 Option A): lenient -- score>=3 AND no contrarian
         // (OI requirement dropped to catch fresh opening signals like Mon's BN CALL)
-        if (absScore < 3) blocks.push("G1");
+        if (absScore < 4) blocks.push("G1");
         if (contrarian) blocks.push("G1");
 
         // Gate 4: late-entry

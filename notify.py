@@ -23,10 +23,10 @@ except ImportError:
 
 
 # Lot sizes and strike-spacing (NSE post-2024 revision)
-LOT_SIZE = {"NIFTY": 75, "BANKNIFTY": 15}
-STRIKE_STEP = {"NIFTY": 50, "BANKNIFTY": 100}
-TARGET_PTS = {"NIFTY": 30, "BANKNIFTY": 60}
-SL_PTS = {"NIFTY": 15, "BANKNIFTY": 30}
+LOT_SIZE = {"NIFTY": 75, "BANKNIFTY": 15, "SENSEX": 20}
+STRIKE_STEP = {"NIFTY": 50, "BANKNIFTY": 100, "SENSEX": 100}
+TARGET_PTS = {"NIFTY": 30, "BANKNIFTY": 60, "SENSEX": 100}
+SL_PTS = {"NIFTY": 15, "BANKNIFTY": 30, "SENSEX": 50}
 ATM_DELTA = 0.50  # rough — ATM weekly delta
 
 

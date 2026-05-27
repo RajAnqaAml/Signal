@@ -12,8 +12,8 @@
     // For NIFTY:     prefix = "hero"        (legacy ids: hero-tier, hero-time, ...)
     // For BANKNIFTY: prefix = "hero-bn"     (ids: hero-bn-tier, hero-bn-time, ...)
     // Today tally NIFTY: "today-*"     BN: "today-bn-*"
-    const HERO_PREFIX = { NIFTY: "hero", BANKNIFTY: "hero-bn" };
-    const TODAY_PREFIX = { NIFTY: "today", BANKNIFTY: "today-bn" };
+    const HERO_PREFIX = { NIFTY: "hero", BANKNIFTY: "hero-bn", SENSEX: "hero-sx" };
+    const TODAY_PREFIX = { NIFTY: "today", BANKNIFTY: "today-bn", SENSEX: "today-sx" };
 
     function el(prefix, suffix) {
         return $(suffix ? `${prefix}-${suffix}` : prefix);
@@ -145,6 +145,7 @@
         $("today-date").textContent = NSE.todayDateIST();
         renderTodayOne("NIFTY", dataBySymbol.NIFTY);
         renderTodayOne("BANKNIFTY", dataBySymbol.BANKNIFTY);
+        if (dataBySymbol.SENSEX) renderTodayOne("SENSEX", dataBySymbol.SENSEX);
     }
 
     // --- Clock & market-status pill -------------------------------------
@@ -187,18 +188,21 @@
     async function refresh() {
         renderClock();
         const today = NSE.todayDateIST();
-        const [niftyLatest, bnLatest, niftyDay, bnDay] = await Promise.all([
+        const [niftyLatest, bnLatest, sxLatest, niftyDay, bnDay, sxDay] = await Promise.all([
             NSE.fetchLatest("NIFTY"),
             NSE.fetchLatest("BANKNIFTY"),
+            NSE.fetchLatest("SENSEX"),
             NSE.fetchDay(today, "NIFTY"),
             NSE.fetchDay(today, "BANKNIFTY"),
+            NSE.fetchDay(today, "SENSEX"),
         ]);
         renderHero("NIFTY", niftyLatest);
         renderHero("BANKNIFTY", bnLatest);
-        renderToday({ NIFTY: niftyDay, BANKNIFTY: bnDay });
+        if (sxLatest) renderHero("SENSEX", sxLatest);
+        renderToday({ NIFTY: niftyDay, BANKNIFTY: bnDay, SENSEX: sxDay });
 
         // Stale banner: use whichever symbol is most recent
-        const latestTs = [niftyLatest, bnLatest]
+        const latestTs = [niftyLatest, bnLatest, sxLatest]
             .filter(r => r && r.ts)
             .map(r => r.ts)
             .sort()

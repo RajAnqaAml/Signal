@@ -335,6 +335,73 @@ def compute_atr(highs, lows, closes, period=14):
     return float(np.mean(tr_vals[-period:]))
 
 
+def compute_adx(highs, lows, closes, period=14):
+    """Compute ADX, +DI, -DI using Wilder's smoothing.
+    Returns dict with adx, plus_di, minus_di, adx_rising, di_spread.
+    Returns None if insufficient data.
+    """
+    n = len(closes)
+    if n < period + 2:
+        return None
+
+    plus_dm = np.zeros(n)
+    minus_dm = np.zeros(n)
+    tr = np.zeros(n)
+
+    for i in range(1, n):
+        up = highs[i] - highs[i - 1]
+        down = lows[i - 1] - lows[i]
+        plus_dm[i] = up if (up > down and up > 0) else 0
+        minus_dm[i] = down if (down > up and down > 0) else 0
+        tr[i] = max(highs[i] - lows[i],
+                     abs(highs[i] - closes[i - 1]),
+                     abs(lows[i] - closes[i - 1]))
+
+    # Wilder's smoothing (EMA with alpha = 1/period)
+    atr = np.mean(tr[1:period + 1])
+    plus_dm_smooth = np.mean(plus_dm[1:period + 1])
+    minus_dm_smooth = np.mean(minus_dm[1:period + 1])
+
+    adx_vals = []
+    for i in range(period + 1, n):
+        atr = atr - (atr / period) + tr[i]
+        plus_dm_smooth = plus_dm_smooth - (plus_dm_smooth / period) + plus_dm[i]
+        minus_dm_smooth = minus_dm_smooth - (minus_dm_smooth / period) + minus_dm[i]
+
+        plus_di = (plus_dm_smooth / atr * 100) if atr > 0 else 0
+        minus_di = (minus_dm_smooth / atr * 100) if atr > 0 else 0
+        di_sum = plus_di + minus_di
+        dx = (abs(plus_di - minus_di) / di_sum * 100) if di_sum > 0 else 0
+        adx_vals.append(dx)
+
+    if len(adx_vals) < period:
+        return None
+
+    # ADX is the smoothed average of DX
+    adx = np.mean(adx_vals[:period])
+    for dx in adx_vals[period:]:
+        adx = (adx * (period - 1) + dx) / period
+
+    # Current +DI and -DI
+    cur_plus_di = (plus_dm_smooth / atr * 100) if atr > 0 else 0
+    cur_minus_di = (minus_dm_smooth / atr * 100) if atr > 0 else 0
+
+    # ADX 3 bars ago for "rising" check
+    adx_prev = adx
+    if len(adx_vals) >= period + 3:
+        adx_prev = np.mean(adx_vals[:period])
+        for dx in adx_vals[period:-3]:
+            adx_prev = (adx_prev * (period - 1) + dx) / period
+
+    return {
+        "adx": round(adx, 2),
+        "plus_di": round(cur_plus_di, 2),
+        "minus_di": round(cur_minus_di, 2),
+        "adx_rising": adx > adx_prev,
+        "di_spread": round(abs(cur_plus_di - cur_minus_di), 2),
+    }
+
+
 def compute_supertrend(highs, lows, closes, period=10, multiplier=3):
     """Simplified SuperTrend indicator."""
     if len(closes) < period:
@@ -601,6 +668,54 @@ def build_real_history(chart_data, bucket_minutes=5):
     return np.array(highs), np.array(lows), np.array(closes)
 
 
+def compute_orb(highs, lows, closes, now_ist=None, orb_bars=12):
+    """Compute Opening Range Breakout data from intraday OHLC bars.
+
+    Returns dict with or_high, or_low, broke_above, broke_below, orb_signal.
+    orb_bars=12 means first 60 minutes (12 x 5-min bars).
+    Returns None if not enough data or still within the opening range period.
+
+    orb_signal:
+      "CALL"    — price broke above OR high only (bullish breakout)
+      "PUT"     — price broke below OR low only (bearish breakout)
+      "CHOPPY"  — price broke both sides (whipsaw day, no trade)
+      "INSIDE"  — price still within OR range (no conviction yet)
+      None      — still in opening range period (< orb_bars)
+    """
+    if len(highs) < orb_bars + 1:
+        return None
+
+    or_high = float(np.max(highs[:orb_bars]))
+    or_low = float(np.min(lows[:orb_bars]))
+
+    post_or_highs = highs[orb_bars:]
+    post_or_lows = lows[orb_bars:]
+
+    if len(post_or_highs) == 0:
+        return {"or_high": or_high, "or_low": or_low,
+                "broke_above": False, "broke_below": False, "orb_signal": None}
+
+    broke_above = bool(np.any(post_or_highs > or_high))
+    broke_below = bool(np.any(post_or_lows < or_low))
+
+    if broke_above and broke_below:
+        orb_signal = "CHOPPY"
+    elif broke_above:
+        orb_signal = "CALL"
+    elif broke_below:
+        orb_signal = "PUT"
+    else:
+        orb_signal = "INSIDE"
+
+    return {
+        "or_high": round(or_high, 2),
+        "or_low": round(or_low, 2),
+        "broke_above": broke_above,
+        "broke_below": broke_below,
+        "orb_signal": orb_signal,
+    }
+
+
 # ─── Signal Generator ───────────────────────────────────────────────────────
 def _gap_decay_weight(now_ist):
     """Gap factor decay: step function so contributions stay integer-clean.
@@ -673,17 +788,24 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
 
     # ── Factor 1: Intraday Move (change since OPEN, not from prev close) ──
     # Using change-from-open avoids double-counting the gap (which Factor 3 handles).
+    # SENSEX is ~20% less volatile in % terms than NIFTY (0.89% avg range vs 1.24%),
+    # so it uses lower thresholds to fire at equivalent conviction levels.
+    MOVE_STRONG = {"NIFTY": 0.8, "BANKNIFTY": 0.8, "SENSEX": 0.65}
+    MOVE_MILD = {"NIFTY": 0.3, "BANKNIFTY": 0.3, "SENSEX": 0.25}
+    move_strong = MOVE_STRONG.get(symbol, 0.8)
+    move_mild = MOVE_MILD.get(symbol, 0.3)
+
     intraday_pct = ((spot - day_open) / day_open * 100) if day_open > 0 else 0
-    if intraday_pct > 0.8:
+    if intraday_pct > move_strong:
         trend_score += 2
         reasons.append(f"Strong intraday up-move +{intraday_pct:.2f}% from open -> Bullish momentum")
-    elif intraday_pct > 0.3:
+    elif intraday_pct > move_mild:
         trend_score += 1
         reasons.append(f"Positive intraday move +{intraday_pct:.2f}% from open")
-    elif intraday_pct < -0.8:
+    elif intraday_pct < -move_strong:
         trend_score -= 2
         reasons.append(f"Strong intraday down-move {intraday_pct:.2f}% from open -> Bearish momentum")
-    elif intraday_pct < -0.3:
+    elif intraday_pct < -move_mild:
         trend_score -= 1
         reasons.append(f"Negative intraday move {intraday_pct:.2f}% from open")
     else:
@@ -897,7 +1019,7 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
         # symbol: (t1_floor, t2_floor, sl_floor)
         "NIFTY":     (50,  100, 40),
         "BANKNIFTY": (100, 200, 80),
-        "SENSEX":    (150, 300, 120),  # ~3x NIFTY, 80K spot level
+        "SENSEX":    (280, 560, 230),  # calibrated: 0.3/0.6/0.25 x 14d ATR (938pts)
     }
     t1_floor, t2_floor, sl_floor = ATR_FLOORS.get(symbol, (50, 100, 40))
     atr_val = (technicals or {}).get("atr")
@@ -917,14 +1039,15 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
     def _round_to_step(price):
         return round(price / step) * step
 
-    if score >= 3:
+    SCORE_THRESHOLD = 4  # raised from 3: score-3 signals had ~50% SL rate across all symbols
+    if score >= SCORE_THRESHOLD:
         signal = "CALL"
         entry = spot
         target1 = _round_to_step(spot + t1_pts)
         target2 = _round_to_step(spot + t2_pts)
         stop_loss = _round_to_step(spot - sl_pts)
         reasons.append(f"Targets: T1={target1} T2={target2} SL={stop_loss} ({target_basis})")
-    elif score <= -3:
+    elif score <= -SCORE_THRESHOLD:
         signal = "PUT"
         entry = spot
         target1 = _round_to_step(spot - t1_pts)
@@ -938,7 +1061,7 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
         target1 = 0
         target2 = 0
         stop_loss = 0
-        reasons.append(f"Score {score:+.2f} below threshold (|3| required) — no trade")
+        reasons.append(f"Score {score:+.2f} below threshold (|4| required) — no trade")
 
     # ── V3 GATES: classify signal into push_tier ──────────────────────────
     # tier classifies WHAT KIND of signal this is:
@@ -949,7 +1072,7 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
     push_tier, tier_blocks = _classify_v3_tier(
         signal, score, confidence, oi_score, trend_score, contrarian_penalty,
         spot, spot_data, symbol, now_ist, reasons,
-        oc_analysis=oc_analysis,
+        oc_analysis=oc_analysis, technicals=technicals,
     )
 
     return {
@@ -980,7 +1103,8 @@ EXPIRY_DOW        = {"NIFTY": 1, "BANKNIFTY": 1, "SENSEX": 3}  # Tue NSE, Thu BS
 
 
 def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_penalty,
-                       spot, spot_data, symbol, now_ist, reasons, oc_analysis=None):
+                       spot, spot_data, symbol, now_ist, reasons, oc_analysis=None,
+                       technicals=None):
     """Run V3 gates to classify a fired signal.
     Returns ("TIER_1" | "TIER_2" | "TIER_3", list_of_block_reasons).
 
@@ -989,8 +1113,7 @@ def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_pen
     Tier 3 (suppressed): NEUTRAL OR signals that failed Gate 1 quality bar.
 
     oc_analysis: optional option-chain analysis dict (from analyze_option_chain).
-                 If provided, uses its `is_expiry_today` flag (sourced from NSE's
-                 actual expiry calendar) instead of falling back to weekday check.
+    technicals: optional dict with ADX/DI data under key "adx_di".
     """
     blocks = []
     if signal == "NEUTRAL":
@@ -1004,8 +1127,8 @@ def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_pen
     # in 5-day live data, including the biggest winner (Mon BN CALL @ 09:15 had
     # OI=0 at market open). Dropping |oi|>=1 to catch fresh opening signals.
     abs_score = abs(score)
-    if abs_score < 3:
-        blocks.append(f"G1: score<3 (got {score:.1f})")
+    if abs_score < 4:
+        blocks.append(f"G1: score<4 (got {score:.1f})")
     if contrarian_penalty < 1.0:
         blocks.append("G1: contrarian penalty applied")
 
@@ -1046,6 +1169,41 @@ def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_pen
     elif direction == "PUT" and trend_score > -1:
         blocks.append(f"G11: PUT but trend not confirming (trend={trend_score:+.1f})")
 
+    # Gate 10: ADX Gatekeeper — trend strength filter.
+    # ADX < 18: no trend, hard block (ranging market = whipsaw zone)
+    # ADX 18-23: caution zone, require rising ADX + DI spread > 5
+    # ADX > 23: trend confirmed, pass freely
+    # ADX > 45: exhaustion, block new entries
+    # DI alignment: CALL needs +DI > -DI, PUT needs -DI > +DI
+    adx_data = (technicals or {}).get("adx_di")
+    if adx_data and isinstance(adx_data, dict):
+        adx_val = adx_data.get("adx", 0)
+        plus_di = adx_data.get("plus_di", 0)
+        minus_di = adx_data.get("minus_di", 0)
+        adx_rising = adx_data.get("adx_rising", False)
+        di_spread = adx_data.get("di_spread", 0)
+
+        if adx_val < 18:
+            blocks.append(f"G10: ADX={adx_val:.1f} < 18 (no trend, ranging market)")
+        elif adx_val < 23:
+            if not adx_rising or di_spread < 5:
+                blocks.append(
+                    f"G10: ADX={adx_val:.1f} caution zone "
+                    f"(rising={adx_rising}, DI spread={di_spread:.1f})"
+                )
+        if adx_val > 45:
+            blocks.append(f"G10: ADX={adx_val:.1f} > 45 (trend exhaustion)")
+
+        # DI alignment: signal direction must match DI dominance
+        if direction == "CALL" and minus_di > plus_di:
+            blocks.append(
+                f"G10: CALL but -DI({minus_di:.1f}) > +DI({plus_di:.1f}) — bearish DI"
+            )
+        elif direction == "PUT" and plus_di > minus_di:
+            blocks.append(
+                f"G10: PUT but +DI({plus_di:.1f}) > -DI({minus_di:.1f}) — bullish DI"
+            )
+
     # Gate 7: Time-of-day filter (after-hours block only; pre-09:30 opening signals allowed).
     if (now_ist.hour, now_ist.minute) >= (14, 30):
         blocks.append("G7: after 14:30 IST (late session)")
@@ -1072,7 +1230,7 @@ def _classify_v3_tier(signal, score, conf, oi_score, trend_score, contrarian_pen
     if not blocks:
         return "TIER_1", []
 
-    critical_gates = {"G4", "G7", "G8", "G11"}
+    critical_gates = {"G4", "G7", "G8", "G10", "G11"}
     has_critical = any(any(g in b for g in critical_gates) for b in blocks)
     if has_critical:
         return "TIER_3", blocks
@@ -1135,7 +1293,7 @@ def index():
 
 
 def build_signals_payload(now_ist=None, verbose=True):
-    """Build the full data+signal dict for both NIFTY and BANKNIFTY.
+    """Build the full data+signal dict for NIFTY, BANKNIFTY, and SENSEX.
     Does NOT check market hours — caller is responsible. Returns the dict that
     /api/signals wraps, and that the recorder writes to disk.
     """
@@ -1163,6 +1321,8 @@ def build_signals_payload(now_ist=None, verbose=True):
             highs, lows, closes, prices = build_price_history(spot_data)
 
         atr_val = compute_atr(highs, lows, closes, period=14) if len(closes) >= 15 else None
+        adx_di = compute_adx(highs, lows, closes) if len(closes) >= 30 else None
+        orb = compute_orb(highs, lows, closes, now_ist) if len(closes) >= 13 else None
         technicals = {
             "rsi": compute_rsi(prices) if len(prices) > 0 else 50,
             "macd": compute_macd(prices) if len(prices) > 0 else {"macd": 0, "signal": 0, "histogram": 0},
@@ -1170,6 +1330,8 @@ def build_signals_payload(now_ist=None, verbose=True):
             "ema21": compute_ema(prices, 21) if len(prices) > 0 else 0,
             "supertrend": compute_supertrend(highs, lows, closes) if len(closes) > 0 else "NEUTRAL",
             "atr": atr_val,
+            "adx_di": adx_di,
+            "orb": orb,
             "history_source": history_source,
             "bars": int(len(closes)),
         }
@@ -1207,6 +1369,8 @@ def build_signals_payload(now_ist=None, verbose=True):
                 highs, lows, closes, prices = build_price_history(spot_data)
 
                 atr_val = compute_atr(highs, lows, closes, period=14) if len(closes) >= 15 else None
+                adx_di = compute_adx(highs, lows, closes) if len(closes) >= 30 else None
+                orb = compute_orb(highs, lows, closes, now_ist) if len(closes) >= 13 else None
                 technicals = {
                     "rsi": compute_rsi(prices) if len(prices) > 0 else 50,
                     "macd": compute_macd(prices) if len(prices) > 0 else {"macd": 0, "signal": 0, "histogram": 0},
@@ -1214,6 +1378,8 @@ def build_signals_payload(now_ist=None, verbose=True):
                     "ema21": compute_ema(prices, 21) if len(prices) > 0 else 0,
                     "supertrend": compute_supertrend(highs, lows, closes) if len(closes) > 0 else "NEUTRAL",
                     "atr": atr_val,
+                    "adx_di": adx_di,
+                    "orb": orb,
                     "history_source": history_source,
                     "bars": int(len(closes)),
                 }

@@ -8,21 +8,22 @@ name: NSE Signal Recorder
 #   - URL: POST https://api.github.com/repos/<owner>/<repo>/dispatches
 #   - Body: {"event_type": "run-recorder"}
 #   - Header: Authorization: Bearer <fine-grained PAT with Actions:write>
-#   - Schedule: every 10 min from 03:45 UTC (09:15 IST) to 10:05 UTC (15:35 IST), Mon-Fri
+#   - Schedule: every 5 min from 03:45 UTC (09:15 IST) to 10:05 UTC (15:35 IST), Mon-Fri
 #   - First fire MUST be 03:45 UTC sharp to capture the market open
 #
-# *** FALLBACK trigger: GH-native cron (every 30 min) ***
+# *** FALLBACK trigger: GH-native cron (every 15 min) ***
 # GitHub free-tier native cron can lag 30+ min during peak hours, so we only
 # use it as a sparse backup. Cron-job.org is the source of truth for timing.
-# Was every 10 min -> caused dual-trigger duplicates (0.3-min gap snapshots).
 
 on:
   repository_dispatch:
     types: [run-recorder]
 
   schedule:
-    # Every 30 min from 03:30-10:00 UTC (09:00-15:30 IST). Backup only.
-    - cron: '0,30 3-10 * * 1-5'
+    # Every 15 min from 03:45-10:00 UTC (09:15-15:30 IST). Backup only.
+    - cron: '0,15,30,45 3-10 * * 1-5'
+    # Daily candle backfill at 10:30 UTC (16:00 IST) — 30 min after market close.
+    - cron: '30 10 * * 1-5'
 
   # Manual trigger from the Actions tab for testing.
   workflow_dispatch:
@@ -60,6 +61,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Take snapshot
+        if: github.event.schedule != '30 10 * * 1-5'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -72,3 +74,11 @@ jobs:
           else
             python recorder.py --once
           fi
+
+      - name: Daily candle backfill (16:00 IST)
+        if: github.event.schedule == '30 10 * * 1-5'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONIOENCODING: utf-8
+        run: python fetch_all_history.py --days 5

@@ -111,7 +111,7 @@ def _row_from_payload(payload: dict, symbol: str) -> Optional[dict]:
 
 
 def insert_snapshot(payload: dict) -> dict:
-    """Insert NIFTY + BANKNIFTY rows from one build_signals_payload output.
+    """Insert NIFTY + BANKNIFTY + SENSEX rows from one build_signals_payload output.
     Returns dict with counts. Idempotent — duplicates on (ts, symbol) are skipped.
     No-op if Supabase isn't configured.
     """
@@ -120,7 +120,7 @@ def insert_snapshot(payload: dict) -> dict:
         return {"skipped": True, "reason": "supabase not configured"}
 
     rows = []
-    for sym in ("NIFTY", "BANKNIFTY"):
+    for sym in ("NIFTY", "BANKNIFTY", "SENSEX"):
         row = _row_from_payload(payload, sym)
         if row:
             rows.append(row)

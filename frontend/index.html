@@ -245,6 +245,55 @@
         </div>
     </section>
 
+    <!-- ─── SENSEX HERO CARD ─── -->
+    <p class="text-[10px] font-semibold text-blush-700 uppercase tracking-widest mb-1.5 px-1">Sensex</p>
+    <section id="hero-sx" data-symbol="SENSEX" class="card hero-card stripe-muted px-5 py-6 mb-3 animate-fade-in">
+
+        <div id="hero-sx-skeleton">
+            <div class="skeleton h-4 w-24 mb-4"></div>
+            <div class="skeleton h-10 w-40 mb-3"></div>
+            <div class="skeleton h-3 w-32 mb-2"></div>
+            <div class="skeleton h-3 w-44"></div>
+        </div>
+
+        <div id="hero-sx-content" class="hidden">
+            <div class="flex items-center justify-between mb-3">
+                <span id="hero-sx-tier" class="pill pill-grey">—</span>
+                <span class="text-xs text-muted stat-mono" id="hero-sx-time">--:--</span>
+            </div>
+            <div class="mb-1">
+                <p id="hero-sx-action" class="text-3xl font-extrabold tracking-tight text-ink">—</p>
+                <p id="hero-sx-instrument" class="text-base font-semibold text-blush-600 mt-0.5 stat-mono">—</p>
+            </div>
+            <div id="hero-sx-levels" class="mt-4 grid grid-cols-3 gap-2 hidden">
+                <div class="rounded-xl bg-blush-100 px-3 py-2.5">
+                    <p class="text-[10px] text-muted uppercase tracking-wider">Spot</p>
+                    <p class="text-sm font-bold stat-mono" id="hero-sx-spot">—</p>
+                </div>
+                <div class="rounded-xl bg-emerald-50 px-3 py-2.5">
+                    <p class="text-[10px] text-emerald-700 uppercase tracking-wider">Target</p>
+                    <p class="text-sm font-bold text-emerald-700 stat-mono" id="hero-sx-target">—</p>
+                    <p class="text-[10px] text-emerald-700 stat-mono" id="hero-sx-target-inr">—</p>
+                </div>
+                <div class="rounded-xl bg-rose-50 px-3 py-2.5">
+                    <p class="text-[10px] text-rose-700 uppercase tracking-wider">Stop</p>
+                    <p class="text-sm font-bold text-rose-700 stat-mono" id="hero-sx-stop">—</p>
+                    <p class="text-[10px] text-rose-700 stat-mono" id="hero-sx-stop-inr">—</p>
+                </div>
+            </div>
+            <p id="hero-sx-exit-note" class="mt-3 text-xs text-muted hidden">
+                ⏱ Exit in <span class="font-semibold text-ink">10 minutes</span> if neither target nor stop hits
+            </p>
+            <div id="hero-sx-why" class="mt-4 pt-4 border-t border-blush-200">
+                <p class="text-[10px] text-muted uppercase tracking-wider mb-1.5">Why</p>
+                <p id="hero-sx-why-text" class="text-xs text-ink leading-relaxed">—</p>
+            </div>
+            <p id="hero-sx-paper-only" class="mt-3 text-[11px] text-amber-700 font-medium hidden">
+                Paper trade only — not validated yet for real money
+            </p>
+        </div>
+    </section>
+
     <!-- ─── TODAY'S TALLY ─── -->
     <section id="today" class="card px-5 py-4 mb-3 animate-fade-in">
         <div class="flex items-center justify-between mb-3">
@@ -263,13 +312,23 @@
         </div>
 
         <!-- BANK NIFTY row -->
-        <div class="flex items-baseline justify-between">
+        <div class="flex items-baseline justify-between pb-3 mb-3 border-b border-blush-200">
             <div>
                 <p class="text-[10px] text-muted uppercase tracking-widest mb-0.5">Bank Nifty</p>
                 <p id="today-bn-trades" class="text-sm font-semibold text-ink">— trades</p>
                 <p id="today-bn-record" class="text-[11px] text-muted">— W / — L</p>
             </div>
             <p id="today-bn-pnl" class="text-xl font-extrabold text-muted stat-mono">—</p>
+        </div>
+
+        <!-- SENSEX row -->
+        <div class="flex items-baseline justify-between">
+            <div>
+                <p class="text-[10px] text-muted uppercase tracking-widest mb-0.5">Sensex</p>
+                <p id="today-sx-trades" class="text-sm font-semibold text-ink">— trades</p>
+                <p id="today-sx-record" class="text-[11px] text-muted">— W / — L</p>
+            </div>
+            <p id="today-sx-pnl" class="text-xl font-extrabold text-muted stat-mono">—</p>
         </div>
     </section>
 

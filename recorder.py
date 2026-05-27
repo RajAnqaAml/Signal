@@ -36,7 +36,7 @@ except ImportError:
     _notify = None
 
 
-NOTIFY_COOLDOWN_MIN = 30  # suppress same-direction re-push within this window
+NOTIFY_COOLDOWN_MIN = 0  # no cooldown — push on every signal transition
 
 
 def _previous_signal(symbol: str) -> str:
@@ -275,15 +275,20 @@ def take_one(now, force=False):
 
     n = payload["data"]["NIFTY"]["signal"]
     b = payload["data"]["BANKNIFTY"]["signal"]
+    sx_part = ""
+    if "SENSEX" in payload["data"]:
+        sx = payload["data"]["SENSEX"]["signal"]
+        sx_part = f" | SX {sx['signal']:7s} {sx['confidence']:5.1f}% (spot {payload['data']['SENSEX']['spot']['price']})"
     target = path or db_status
     print(
         f"[{now.strftime('%H:%M:%S')}] -> {target} | "
         f"NIFTY {n['signal']:7s} {n['confidence']:5.1f}% (spot {payload['data']['NIFTY']['spot']['price']}) | "
-        f"BN {b['signal']:7s} {b['confidence']:5.1f}% (spot {payload['data']['BANKNIFTY']['spot']['price']})",
+        f"BN {b['signal']:7s} {b['confidence']:5.1f}% (spot {payload['data']['BANKNIFTY']['spot']['price']})"
+        f"{sx_part}",
         flush=True,
     )
 
-    # Push notifications for BOTH symbols. V3: only TIER_1 signals push to
+    # Push notifications for all symbols. V3: only TIER_1 signals push to
     # phone; TIER_2 surfaces on dashboard only. _maybe_notify also fires EXIT
     # pushes when engine flips out of an active direction.
     nifty_spot = payload["data"]["NIFTY"]["spot"]["price"]
@@ -296,6 +301,13 @@ def take_one(now, force=False):
         _maybe_notify("BANKNIFTY", b, current_spot=bn_spot)
     except Exception as e:
         print(f"[notify] error: {e}", flush=True)
+    if "SENSEX" in payload["data"]:
+        try:
+            sx = payload["data"]["SENSEX"]["signal"]
+            sx_spot = payload["data"]["SENSEX"]["spot"]["price"]
+            _maybe_notify("SENSEX", sx, current_spot=sx_spot)
+        except Exception as e:
+            print(f"[notify] SENSEX error: {e}", flush=True)
 
 
 def parse_stop_after(s):

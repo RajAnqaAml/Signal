@@ -266,7 +266,7 @@ def run_day_backtest(date_str, candles_today, prev_close, vix_map, horizon, symb
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--symbol", default="NIFTY", choices=["NIFTY", "BANKNIFTY"])
+    parser.add_argument("--symbol", default="NIFTY", choices=["NIFTY", "BANKNIFTY", "SENSEX"])
     parser.add_argument("--horizon", type=int, default=6, help="5-min candles to look forward (6=30min)")
     args = parser.parse_args()
 
