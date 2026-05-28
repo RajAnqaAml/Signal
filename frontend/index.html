@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#FDF2F8">
-    <title>NIFTY + BANKNIFTY Signals</title>
+    <title>NIFTY + BANKNIFTY + SENSEX Signals</title>
 
     <!-- Tailwind via CDN (no build step). Custom pink palette below. -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -111,8 +111,8 @@
 
 <body class="font-sans antialiased">
 
-<!-- Container constrains to mobile-friendly width even on desktop -->
-<div class="mx-auto max-w-md px-4 pb-10 pt-3 sm:pt-5">
+<!-- Container: narrow on mobile, expands to 3-column grid on desktop -->
+<div class="mx-auto max-w-md md:max-w-6xl px-4 pb-10 pt-3 sm:pt-5">
 
     <!-- ─── Stale data banner (auto-shows when latest snapshot > 15 min old) ─── -->
     <div id="stale-banner" class="hidden mb-3 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 flex items-center gap-2 animate-fade-in">
@@ -128,7 +128,7 @@
             </div>
             <div>
                 <h1 class="text-lg font-bold tracking-tight">Signals</h1>
-                <p class="text-[10px] text-muted uppercase tracking-widest">NIFTY + BANK NIFTY</p>
+                <p class="text-[10px] text-muted uppercase tracking-widest">NIFTY + BANK NIFTY + SENSEX</p>
             </div>
         </div>
         <div class="text-right">
@@ -147,9 +147,13 @@
         <a href="history.html" data-nav="history" class="text-muted hover:text-blush-600">📜 History</a>
     </nav>
 
+    <!-- ─── HERO CARDS GRID (1 col mobile, 3 cols desktop) ─── -->
+    <div class="md:grid md:grid-cols-3 md:gap-4 md:mb-4">
+
     <!-- ─── NIFTY HERO CARD ─── -->
+    <div class="md:flex md:flex-col">
     <p class="text-[10px] font-semibold text-blush-700 uppercase tracking-widest mb-1.5 px-1">NIFTY</p>
-    <section id="hero" data-symbol="NIFTY" class="card hero-card stripe-muted px-5 py-6 mb-4 animate-fade-in">
+    <section id="hero" data-symbol="NIFTY" class="card hero-card stripe-muted px-5 py-6 mb-4 md:mb-0 animate-fade-in">
 
         <div id="hero-skeleton">
             <div class="skeleton h-4 w-24 mb-4"></div>
@@ -196,9 +200,12 @@
         </div>
     </section>
 
+    </div>
+
     <!-- ─── BANK NIFTY HERO CARD ─── -->
+    <div class="md:flex md:flex-col">
     <p class="text-[10px] font-semibold text-blush-700 uppercase tracking-widest mb-1.5 px-1">Bank Nifty</p>
-    <section id="hero-bn" data-symbol="BANKNIFTY" class="card hero-card stripe-muted px-5 py-6 mb-3 animate-fade-in">
+    <section id="hero-bn" data-symbol="BANKNIFTY" class="card hero-card stripe-muted px-5 py-6 mb-3 md:mb-0 animate-fade-in">
 
         <div id="hero-bn-skeleton">
             <div class="skeleton h-4 w-24 mb-4"></div>
@@ -245,9 +252,12 @@
         </div>
     </section>
 
+    </div>
+
     <!-- ─── SENSEX HERO CARD ─── -->
+    <div class="md:flex md:flex-col">
     <p class="text-[10px] font-semibold text-blush-700 uppercase tracking-widest mb-1.5 px-1">Sensex</p>
-    <section id="hero-sx" data-symbol="SENSEX" class="card hero-card stripe-muted px-5 py-6 mb-3 animate-fade-in">
+    <section id="hero-sx" data-symbol="SENSEX" class="card hero-card stripe-muted px-5 py-6 mb-3 md:mb-0 animate-fade-in">
 
         <div id="hero-sx-skeleton">
             <div class="skeleton h-4 w-24 mb-4"></div>
@@ -293,6 +303,10 @@
             </p>
         </div>
     </section>
+    </div>
+
+    </div>
+    <!-- ─── END HERO CARDS GRID ─── -->
 
     <!-- ─── TODAY'S TALLY ─── -->
     <section id="today" class="card px-5 py-4 mb-3 animate-fade-in">
@@ -301,34 +315,38 @@
             <span id="today-date" class="text-[10px] text-muted stat-mono">—</span>
         </div>
 
-        <!-- NIFTY row -->
-        <div class="flex items-baseline justify-between pb-3 mb-3 border-b border-blush-200">
-            <div>
-                <p class="text-[10px] text-muted uppercase tracking-widest mb-0.5">NIFTY</p>
-                <p id="today-trades" class="text-sm font-semibold text-ink">— trades</p>
-                <p id="today-record" class="text-[11px] text-muted">— W / — L</p>
-            </div>
-            <p id="today-pnl" class="text-xl font-extrabold text-muted stat-mono">—</p>
-        </div>
+        <div class="md:grid md:grid-cols-3 md:gap-4">
 
-        <!-- BANK NIFTY row -->
-        <div class="flex items-baseline justify-between pb-3 mb-3 border-b border-blush-200">
-            <div>
-                <p class="text-[10px] text-muted uppercase tracking-widest mb-0.5">Bank Nifty</p>
-                <p id="today-bn-trades" class="text-sm font-semibold text-ink">— trades</p>
-                <p id="today-bn-record" class="text-[11px] text-muted">— W / — L</p>
+            <!-- NIFTY row -->
+            <div class="flex items-baseline justify-between pb-3 mb-3 border-b border-blush-200 md:border-b-0 md:pb-0 md:mb-0 md:border-r md:pr-4">
+                <div>
+                    <p class="text-[10px] text-muted uppercase tracking-widest mb-0.5">NIFTY</p>
+                    <p id="today-trades" class="text-sm font-semibold text-ink">— trades</p>
+                    <p id="today-record" class="text-[11px] text-muted">— W / — L</p>
+                </div>
+                <p id="today-pnl" class="text-xl font-extrabold text-muted stat-mono">—</p>
             </div>
-            <p id="today-bn-pnl" class="text-xl font-extrabold text-muted stat-mono">—</p>
-        </div>
 
-        <!-- SENSEX row -->
-        <div class="flex items-baseline justify-between">
-            <div>
-                <p class="text-[10px] text-muted uppercase tracking-widest mb-0.5">Sensex</p>
-                <p id="today-sx-trades" class="text-sm font-semibold text-ink">— trades</p>
-                <p id="today-sx-record" class="text-[11px] text-muted">— W / — L</p>
+            <!-- BANK NIFTY row -->
+            <div class="flex items-baseline justify-between pb-3 mb-3 border-b border-blush-200 md:border-b-0 md:pb-0 md:mb-0 md:border-r md:pr-4">
+                <div>
+                    <p class="text-[10px] text-muted uppercase tracking-widest mb-0.5">Bank Nifty</p>
+                    <p id="today-bn-trades" class="text-sm font-semibold text-ink">— trades</p>
+                    <p id="today-bn-record" class="text-[11px] text-muted">— W / — L</p>
+                </div>
+                <p id="today-bn-pnl" class="text-xl font-extrabold text-muted stat-mono">—</p>
             </div>
-            <p id="today-sx-pnl" class="text-xl font-extrabold text-muted stat-mono">—</p>
+
+            <!-- SENSEX row -->
+            <div class="flex items-baseline justify-between">
+                <div>
+                    <p class="text-[10px] text-muted uppercase tracking-widest mb-0.5">Sensex</p>
+                    <p id="today-sx-trades" class="text-sm font-semibold text-ink">— trades</p>
+                    <p id="today-sx-record" class="text-[11px] text-muted">— W / — L</p>
+                </div>
+                <p id="today-sx-pnl" class="text-xl font-extrabold text-muted stat-mono">—</p>
+            </div>
+
         </div>
     </section>
 
