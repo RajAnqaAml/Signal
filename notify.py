@@ -127,22 +127,40 @@ def send_signal_alert(symbol: str, signal_row: dict) -> bool:
     # Body — compact, scannable. NOTE: removed "exit in 10 min" line because
     # engine signals routinely sustain conviction for HOURS (Mon BN ran 5+ hrs).
     # Exit guidance now follows the engine state, not a fixed time cap.
+    # AI engine fields (new)
+    ai_reasoning = signal_row.get("ai_reasoning", "")
+    ai_regime    = signal_row.get("ai_regime", "")
+    ai_key_risk  = signal_row.get("ai_key_risk", "")
+    ai_hold_min  = signal_row.get("ai_hold_min", 0)
+    is_ai_signal = bool(signal_row.get("evidence_quality") == "ai" or ai_reasoning)
+
     body = [
         f"Spot:    {spot:.2f}",
         f"Buy:     {option}  (ATM weekly, {lot}-share lot)",
         "",
         f"Target:  spot {target_spot:.0f}  ({direction == 'PUT' and '-' or '+'}{target_pts} pts)  ≈ +Rs {target_inr}",
         f"Stop:    spot {sl_spot:.0f}  ({direction == 'PUT' and '+' or '-'}{sl_pts} pts)  ≈ -Rs {sl_inr}",
-        "Exit:    HOLD while engine stays {dir}. Exit when engine flips to NEUTRAL/opposite.".format(dir=direction),
+        f"Hold:    max {ai_hold_min} min (exit if signal flips)" if ai_hold_min else
+        "Exit:    HOLD while engine stays {dir}. Exit when signal flips.".format(dir=direction),
         "",
+        f"Conf: {conf:.0f}%  Regime: {ai_regime}  Tier: {tier}" if ai_regime else
         f"Score: {score:+.2f}  Conf: {conf:.0f}%  Tier: {tier}",
         "",
-        "Why:",
+        "AI Reasoning:",
     ]
-    # Top 4 most useful reasons
-    keep = [r for r in reasons if "Real intraday" not in r and "below threshold" not in r][:4]
-    for r in keep:
-        body.append(f"  - {r}")
+
+    if is_ai_signal and ai_reasoning:
+        # Wrap long reasoning into lines
+        body.append(f"  {ai_reasoning}")
+        if ai_key_risk:
+            body.append(f"")
+            body.append(f"Risk: {ai_key_risk}")
+    else:
+        # Legacy rule-based reasons
+        body.append("Why:")
+        keep = [r for r in reasons if "Real intraday" not in r and "below threshold" not in r][:4]
+        for r in keep:
+            body.append(f"  - {r}")
 
     # AI Filter verdict (attached by recorder.py if Gemini filter ran)
     ai_verdict  = signal_row.get("ai_verdict")

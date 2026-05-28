@@ -23,7 +23,7 @@ import time
 import traceback
 from datetime import datetime, timedelta
 
-from app import IST, build_signals_payload, is_market_open
+from app import IST, build_ai_signals_payload, build_signals_payload, is_market_open
 
 try:
     import db as _db  # Supabase layer; safe to import even without creds
@@ -283,7 +283,7 @@ def take_one(now, force=False):
     if not force and not is_market_open(now):
         print(f"[{now.strftime('%H:%M:%S')}] Market closed — skipping snapshot (use --force to override)", flush=True)
         return
-    payload = build_signals_payload(now, verbose=False)
+    payload = build_ai_signals_payload(now, verbose=False)
 
     # Primary destination: Supabase (if configured)
     db_status = "no-db"

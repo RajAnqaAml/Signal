@@ -1420,6 +1420,158 @@ def build_signals_payload(now_ist=None, verbose=True):
     }
 
 
+# ─── AI Engine payload builder ─────────────────────────────────────────────────
+
+def _sanitize(obj):
+    """Recursively convert numpy scalars/booleans to native Python types for JSON."""
+    import numpy as np
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize(v) for v in obj]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
+
+
+def build_ai_signals_payload(now_ist=None, verbose=True):
+    """AI-powered replacement for build_signals_payload().
+
+    Fetches the same market data (spot, OI, option chain, VIX, technicals)
+    but calls ai_engine.generate_signal() instead of the rule-based engine.
+    Output dict is identical in structure — fully compatible with recorder.py,
+    the Supabase DB layer, and the dashboard frontend.
+    """
+    try:
+        import ai_engine as _ai
+    except ImportError:
+        print("[Signals] ai_engine not found — falling back to rule-based engine", flush=True)
+        return build_signals_payload(now_ist=now_ist, verbose=verbose)
+
+    now_ist  = now_ist or datetime.now(tz=IST)
+    vix_data = nse.fetch_vix()
+    breadth  = nse.fetch_market_breadth()
+    if verbose:
+        print(f"[AI Signals] VIX: {vix_data} | Breadth: {breadth}")
+
+    results = {}
+
+    # ── NIFTY and BANKNIFTY (NSE) ──────────────────────────────────────────
+    for symbol in ["NIFTY", "BANKNIFTY"]:
+        try:
+            spot_data   = nse.fetch_spot_price(symbol)
+            oc_data     = nse.fetch_option_chain(symbol)
+            oc_analysis = analyze_option_chain(oc_data, spot_data["price"], symbol, now_ist) if oc_data else None
+
+            chart = nse.fetch_intraday_chart(symbol)
+            highs, lows, closes = build_real_history(chart)
+            if len(closes) >= 30:
+                history_source = "real"
+            else:
+                history_source = "synthetic"
+                highs, lows, closes, _ = build_price_history(spot_data)
+
+            atr_val = compute_atr(highs, lows, closes, period=14) if len(closes) >= 15 else None
+            adx_di  = compute_adx(highs, lows, closes) if len(closes) >= 30 else None
+
+            technicals = {
+                "rsi":       compute_rsi(closes)             if len(closes) > 0 else 50,
+                "macd":      compute_macd(closes)            if len(closes) > 0 else {},
+                "ema9":      compute_ema(closes, 9)          if len(closes) > 0 else 0,
+                "ema21":     compute_ema(closes, 21)         if len(closes) > 0 else 0,
+                "supertrend":compute_supertrend(highs, lows, closes) if len(closes) > 0 else "NEUTRAL",
+                "atr":       atr_val,
+                "adx_di":    adx_di,
+                "history_source": history_source,
+                "bars":      int(len(closes)),
+                # Pass raw arrays so AI engine can show the candle table
+                "_closes":   closes.tolist() if hasattr(closes, "tolist") else list(closes),
+                "_highs":    highs.tolist()  if hasattr(highs,  "tolist") else list(highs),
+                "_lows":     lows.tolist()   if hasattr(lows,   "tolist") else list(lows),
+            }
+
+            signal = _ai.generate_signal(
+                symbol, spot_data, oc_analysis, technicals, vix_data, now_ist=now_ist
+            )
+
+            if verbose:
+                pcr = oc_analysis["pcr_total"] if oc_analysis else "N/A"
+                print(f"[AI Signals] {symbol} spot={spot_data['price']} "
+                      f"signal={signal['signal']}@{signal['confidence']:.0f}% "
+                      f"tier={signal['push_tier']} PCR={pcr}")
+
+            results[symbol] = {
+                "spot": spot_data, "oi": None,
+                "option_chain": oc_analysis, "breadth": breadth,
+                "indicators": {k: v for k, v in technicals.items() if not k.startswith("_")},
+                "signal": signal,
+            }
+        except Exception as e:
+            print(f"[AI Signals] {symbol} failed: {e}", flush=True)
+            import traceback; traceback.print_exc()
+
+    # ── SENSEX (BSE) — isolated, failure-safe ─────────────────────────────
+    if bse is not None:
+        try:
+            symbol    = "SENSEX"
+            spot_data = bse.fetch_spot_price()
+            if spot_data and spot_data["price"] > 0:
+                oc_data     = bse.fetch_option_chain()
+                oc_analysis = analyze_option_chain(oc_data, spot_data["price"], symbol, now_ist) if oc_data else None
+
+                history_source = "synthetic"
+                highs, lows, closes, _ = build_price_history(spot_data)
+
+                atr_val = compute_atr(highs, lows, closes, period=14) if len(closes) >= 15 else None
+
+                technicals = {
+                    "rsi":       compute_rsi(closes)             if len(closes) > 0 else 50,
+                    "macd":      compute_macd(closes)            if len(closes) > 0 else {},
+                    "ema9":      compute_ema(closes, 9)          if len(closes) > 0 else 0,
+                    "ema21":     compute_ema(closes, 21)         if len(closes) > 0 else 0,
+                    "supertrend":compute_supertrend(highs, lows, closes) if len(closes) > 0 else "NEUTRAL",
+                    "atr":       atr_val,
+                    "history_source": history_source,
+                    "bars":      int(len(closes)),
+                    "_closes":   closes.tolist() if hasattr(closes, "tolist") else list(closes),
+                    "_highs":    highs.tolist()  if hasattr(highs,  "tolist") else list(highs),
+                    "_lows":     lows.tolist()   if hasattr(lows,   "tolist") else list(lows),
+                }
+
+                signal = _ai.generate_signal(
+                    symbol, spot_data, oc_analysis, technicals, vix_data, now_ist=now_ist
+                )
+
+                if verbose:
+                    pcr = oc_analysis["pcr_total"] if oc_analysis else "N/A"
+                    print(f"[AI Signals] {symbol} spot={spot_data['price']} "
+                          f"signal={signal['signal']}@{signal['confidence']:.0f}% "
+                          f"tier={signal['push_tier']} PCR={pcr}")
+
+                results[symbol] = {
+                    "spot": spot_data, "oi": None,
+                    "option_chain": oc_analysis, "breadth": breadth,
+                    "indicators": {k: v for k, v in technicals.items() if not k.startswith("_")},
+                    "signal": signal,
+                }
+            elif verbose:
+                print("[AI Signals] SENSEX spot unavailable — skipping")
+        except Exception as e:
+            print(f"[AI Signals] SENSEX failed (skipping): {e}", flush=True)
+
+    return _sanitize({
+        "timestamp": now_ist.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        "vix": vix_data,
+        "data": results,
+    })
+
+
 @app.route("/api/signals")
 def api_signals():
     try:

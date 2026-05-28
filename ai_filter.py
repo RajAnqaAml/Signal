@@ -120,8 +120,15 @@ def _parse(text: str) -> dict:
 
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
-def evaluate_signal(symbol: str, signal_block: dict, ctx: dict) -> dict:
+def evaluate_signal(symbol: str, signal_block: dict, ctx: dict,
+                    now_ist: datetime = None) -> dict:
     """Validate a TIER_1 signal via Gemini before pushing notification.
+
+    Parameters
+    ----------
+    now_ist : datetime, optional
+        Override current time (used for backtesting historical signals).
+        Defaults to datetime.now(tz=IST).
 
     Returns dict: verdict, reason, risk, key_concern, raw.
     On any failure returns CAUTION default — never raises.
@@ -144,7 +151,7 @@ def evaluate_signal(symbol: str, signal_block: dict, ctx: dict) -> dict:
         warnings.filterwarnings("ignore")
 
         client  = _get_client()
-        now     = datetime.now(tz=IST)
+        now     = now_ist or datetime.now(tz=IST)
         today   = now.strftime("%d %B %Y")
         time_str = now.strftime("%I:%M %p IST")
 
