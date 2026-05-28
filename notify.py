@@ -144,6 +144,20 @@ def send_signal_alert(symbol: str, signal_row: dict) -> bool:
     for r in keep:
         body.append(f"  - {r}")
 
+    # AI Filter verdict (attached by recorder.py if Gemini filter ran)
+    ai_verdict  = signal_row.get("ai_verdict")
+    ai_risk     = signal_row.get("ai_risk", "")
+    ai_reason   = signal_row.get("ai_reason", "")
+    ai_concern  = signal_row.get("ai_concern", "")
+    if ai_verdict:
+        verdict_icon = {"CONFIRM": "✅", "CAUTION": "⚠️", "SKIP": "🚫"}.get(ai_verdict, "🤖")
+        body.append("")
+        body.append(f"AI: {verdict_icon} {ai_verdict}  Risk: {ai_risk}")
+        if ai_reason:
+            body.append(f"    {ai_reason}")
+        if ai_concern and ai_concern.lower() != "none":
+            body.append(f"Watch: {ai_concern}")
+
     # Strip arrows so the message is robust across ntfy clients
     body_text = "\n".join(body).replace("→", "->").replace("—", "-")
 

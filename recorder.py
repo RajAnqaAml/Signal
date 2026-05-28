@@ -35,6 +35,13 @@ try:
 except ImportError:
     _notify = None
 
+try:
+    import ai_filter as _ai_filter
+    import market_context as _mctx
+    _AI_ENABLED = True
+except ImportError:
+    _AI_ENABLED = False
+
 
 NOTIFY_COOLDOWN_MIN = 0  # no cooldown — push on every signal transition
 
@@ -233,10 +240,28 @@ def _maybe_notify(symbol: str, sig_block: dict, current_spot: float = None):
             )
             return
 
+    # ── AI Filter (Gemini with Google Search grounding) ────────────────
+    # Uses ai_result attached to sig_block by take_one() before calling here.
+    ai = sig_block.get("_ai_result")
+    if ai:
+        if ai["verdict"] == "SKIP":
+            print(
+                f"[ai_filter] {symbol} {direction} SKIPPED by AI: {ai['reason']}",
+                flush=True,
+            )
+            return
+        # Attach AI verdict to the notification row
+        sig_block = {**sig_block,
+                     "ai_verdict":  ai["verdict"],
+                     "ai_risk":     ai["risk"],
+                     "ai_reason":   ai["reason"],
+                     "ai_concern":  ai["key_concern"]}
+
     # Fire entry push
     row_like = {**sig_block, "spot_price": sig_block.get("entry")}
     ok = _notify.send_signal_alert(symbol, row_like)
-    print(f"[notify] {symbol} {direction} TIER_1 (prev={prev or 'none'}) -> {'sent' if ok else 'FAIL'}", flush=True)
+    ai_tag = f" [AI:{ai['verdict']}/{ai['risk']}]" if ai else ""
+    print(f"[notify] {symbol} {direction} TIER_1 (prev={prev or 'none'}){ai_tag} -> {'sent' if ok else 'FAIL'}", flush=True)
 
 SNAPSHOT_DIR = "snapshots"
 
@@ -291,23 +316,41 @@ def take_one(now, force=False):
     # Push notifications for all symbols. V3: only TIER_1 signals push to
     # phone; TIER_2 surfaces on dashboard only. _maybe_notify also fires EXIT
     # pushes when engine flips out of an active direction.
+    #
+    # AI Filter: for every TIER_1 non-NEUTRAL entry signal, we call Gemini
+    # (with Google Search grounding) before pushing. Result is attached to the
+    # signal block as '_ai_result'. SKIP verdict suppresses the notification.
     nifty_spot = payload["data"]["NIFTY"]["spot"]["price"]
     bn_spot = payload["data"]["BANKNIFTY"]["spot"]["price"]
-    try:
-        _maybe_notify("NIFTY", n, current_spot=nifty_spot)
-    except Exception as e:
-        print(f"[notify] error: {e}", flush=True)
-    try:
-        _maybe_notify("BANKNIFTY", b, current_spot=bn_spot)
-    except Exception as e:
-        print(f"[notify] error: {e}", flush=True)
+
+    _sym_spots = {
+        "NIFTY":     nifty_spot,
+        "BANKNIFTY": bn_spot,
+    }
     if "SENSEX" in payload["data"]:
+        _sym_spots["SENSEX"] = payload["data"]["SENSEX"]["spot"]["price"]
+
+    for _sym, _sig, _spot in [
+        ("NIFTY",     n,    nifty_spot),
+        ("BANKNIFTY", b,    bn_spot),
+    ] + ([("SENSEX", payload["data"]["SENSEX"]["signal"],
+           payload["data"]["SENSEX"]["spot"]["price"])]
+         if "SENSEX" in payload["data"] else []):
         try:
-            sx = payload["data"]["SENSEX"]["signal"]
-            sx_spot = payload["data"]["SENSEX"]["spot"]["price"]
-            _maybe_notify("SENSEX", sx, current_spot=sx_spot)
+            # Run AI filter only on TIER_1 entry signals (saves API quota)
+            if (_AI_ENABLED
+                    and _sig.get("signal") != "NEUTRAL"
+                    and _sig.get("push_tier") == "TIER_1"):
+                try:
+                    _ctx = _mctx.build_context(_sym, _sig, payload)
+                    _ai  = _ai_filter.evaluate_signal(_sym, _sig, _ctx)
+                    _sig["_ai_result"] = _ai
+                except Exception as _ae:
+                    print(f"[ai_filter] {_sym} error: {_ae} — skipping filter", flush=True)
+
+            _maybe_notify(_sym, _sig, current_spot=_spot)
         except Exception as e:
-            print(f"[notify] SENSEX error: {e}", flush=True)
+            print(f"[notify] {_sym} error: {e}", flush=True)
 
 
 def parse_stop_after(s):
