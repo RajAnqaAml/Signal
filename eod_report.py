@@ -32,7 +32,7 @@ import db
 IST = ZoneInfo("Asia/Kolkata")
 LOT_SIZE = {"NIFTY": 75, "BANKNIFTY": 15, "SENSEX": 20}
 TARGET_PTS = {"NIFTY": 30, "BANKNIFTY": 60, "SENSEX": 100}
-SL_PTS = {"NIFTY": 15, "BANKNIFTY": 30, "SENSEX": 50}
+SL_PTS = {"NIFTY": 18, "BANKNIFTY": 30, "SENSEX": 50}
 
 # Colors (professional report palette)
 COLOR_PRIMARY = HexColor("#1e3a8a")     # deep blue

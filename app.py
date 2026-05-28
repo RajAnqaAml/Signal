@@ -1015,26 +1015,31 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
     # more volatile, so a 50-pt floor (NIFTY-appropriate) would give nonsensically
     # tight BN targets (~0.09% of spot). NIFTY values are unchanged from the prior
     # design.
+    # T1/T2 from ATR (or floor). SL is ALWAYS T1/2 to enforce R:R 2:1.
+    # Backtest 20d SENSEX: R:R 2:1 swung net P&L from -80 pts to +611 pts.
+    # SL floor removed — the R:R 2:1 constraint takes precedence.
     ATR_FLOORS = {
-        # symbol: (t1_floor, t2_floor, sl_floor)
-        "NIFTY":     (50,  100, 40),
-        "BANKNIFTY": (100, 200, 80),
-        "SENSEX":    (280, 560, 230),  # calibrated: 0.3/0.6/0.25 x 14d ATR (938pts)
+        # symbol: (t1_floor, t2_floor)
+        "NIFTY":     (50,  100),
+        "BANKNIFTY": (100, 200),
+        "SENSEX":    (280, 560),
     }
-    t1_floor, t2_floor, sl_floor = ATR_FLOORS.get(symbol, (50, 100, 40))
+    t1_floor, t2_floor = ATR_FLOORS.get(symbol, (50, 100))
     atr_val = (technicals or {}).get("atr")
     if atr_val and atr_val > 0:
         t1_pts = max(t1_floor, int(round(atr_val * 1.5)))
         t2_pts = max(t2_floor, int(round(atr_val * 3.0)))
-        sl_pts = max(sl_floor, int(round(atr_val * 1.2)))
         target_basis = f"ATR={atr_val:.1f}"
     else:
-        # Fallback to original step-based rule when ATR not available
-        # (warmup period, flow-only mode, or insufficient candle history).
+        # Fallback to step-based rule when ATR not available (warmup, no history).
         t1_pts = int(step * 1.5)
         t2_pts = int(step * 3.0)
-        sl_pts = int(step * 1.2)
         target_basis = f"static step={step}"
+    # R:R per symbol: SENSEX/BANKNIFTY use 2:1 (SL = T1/2),
+    # NIFTY uses 1.67:1 (SL = T1 * 0.6) because NIFTY 5m bar noise (~15-25pts)
+    # would trigger 25pt SL too often. Backtest validated.
+    SL_RATIOS = {"NIFTY": 0.6, "BANKNIFTY": 0.5, "SENSEX": 0.5}
+    sl_pts = int(t1_pts * SL_RATIOS.get(symbol, 0.5))
 
     def _round_to_step(price):
         return round(price / step) * step

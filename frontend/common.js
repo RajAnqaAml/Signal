@@ -10,7 +10,7 @@
 
     // Per-symbol option-chain constants.
     const SYMBOL_CONFIG = {
-        NIFTY:     { lot: 75, step: 50,  target: 30,  sl: 15, label: "NIFTY"     },
+        NIFTY:     { lot: 75, step: 50,  target: 30,  sl: 18, label: "NIFTY"     },
         BANKNIFTY: { lot: 15, step: 100, target: 60,  sl: 30, label: "BANK NIFTY" },
         SENSEX:    { lot: 20, step: 100, target: 100, sl: 50, label: "SENSEX"    },
     };
