@@ -23,9 +23,10 @@ from datetime import datetime
 import numpy as np
 
 from app import (
-    generate_signal, compute_rsi, compute_macd, compute_ema,
+    compute_rsi, compute_macd, compute_ema,
     compute_supertrend, compute_atr, compute_adx, IST,
 )
+from ai_engine import generate_signal as ai_generate_signal
 import db as _db
 import notify
 
@@ -171,15 +172,13 @@ def run_day(candles, prev_close, symbol, cache, use_cache, no_cache):
             "bars": len(closes_arr),
         }
 
-        sig = generate_signal(
-            spot_data,
-            {"value": 15, "change": 0},
-            None,
-            {"advances": 25, "declines": 20, "unchanged": 5},
-            technicals,
+        sig = ai_generate_signal(
             symbol=symbol,
-            now_ist=dt,
-            history_source="real",
+            spot_data=spot_data,
+            oc_analysis=None,
+            technicals=technicals,
+            vix_data={"value": 15, "change": 0},
+            now_ist=dt
         )
 
         # Manage active trade
@@ -194,13 +193,10 @@ def run_day(candles, prev_close, symbol, cache, use_cache, no_cache):
                 trades.append(active)
                 last_exit_dir = active["direction"]
                 active = None
-            # If not resolved yet, keep waiting (checked via `if active` next loop)
-            # Note: for simplicity we resolve at next check, not bar-by-bar here.
-            # Actual resolution is deferred to end-of-signal or next signal fire.
-
-        if sig["signal"] == "NEUTRAL":
+            # If not resolved yet, keep waiting
+            
+        if sig["signal"] == "WAIT" or sig["signal"] == "NEUTRAL":
             last_exit_dir = None
-            # Flush pending active trade on NEUTRAL if time exceeded
             if active:
                 outcome, exit_px, pts, exit_time, bars = resolve_trade(
                     active, candles, active["entry_idx"]
@@ -218,61 +214,11 @@ def run_day(candles, prev_close, symbol, cache, use_cache, no_cache):
         if active is not None or sig["signal"] == last_exit_dir:
             continue
 
-        tier_blocks = sig.get("tier_blocks", [])
-        push_tier   = sig.get("push_tier", "TIER_3")
+        push_tier = sig.get("push_tier", "TIER_3")
 
         # Only simulate TIER_1 signals
         if push_tier != "TIER_1":
             continue
-
-        # G10 critical block — skip
-        if any("G10" in b for b in tier_blocks):
-            continue
-
-        # ── Run AI filter ─────────────────────────────────────────────────
-        ai_verdict = "CONFIRM"   # default if AI disabled
-        ai_reason  = "AI not run"
-        ai_risk    = "N/A"
-
-        ck = _cache_key(symbol, sig["signal"], sig["score"], dt)
-
-        if not no_cache and ck in cache:
-            cached = cache[ck]
-            ai_verdict = cached["verdict"]
-            ai_reason  = cached["reason"]
-            ai_risk    = cached.get("risk", "MEDIUM")
-            print(f"  [AI cache] {dt.strftime('%H:%M')} {sig['signal']} -> {ai_verdict} ({ai_reason[:50]})")
-        else:
-            # Build a minimal context for backtesting (no live option chain)
-            from market_context import _adx_from_tier_blocks, _dte, _EXPIRY_NAME
-            mock_ctx = {
-                "exchange":        "BSE" if symbol == "SENSEX" else "NSE",
-                "lot_size":        notify.LOT_SIZE.get(symbol, 75),
-                "strike_gap":      notify.STRIKE_STEP.get(symbol, 50),
-                "expiry_day":      _EXPIRY_NAME.get(symbol, "Tuesday"),
-                "dte":             _dte(symbol, dt),
-                "atm_premium":     int(atr_val * 0.55 * max(_dte(symbol, dt), 0.5) ** 0.5) if atr_val else 110,
-                "iv":              "~15",
-                "vix":             15.0,
-                "rsi":             round(float(technicals["rsi"] or 50), 1),
-                "adx":             _adx_from_tier_blocks(tier_blocks),
-                "score_100":       max(0, min(100, int((float(sig["score"]) + 10) * 5))),
-                "us_market":       "Unavailable (backtest mode)",
-                "sgx_change":      "N/A (backtest mode)",
-                "capital_at_risk": notify.LOT_SIZE.get(symbol, 75) * 110,
-            }
-
-            from ai_filter import evaluate_signal
-            ai_res = evaluate_signal(symbol, sig, mock_ctx, now_ist=dt)
-            ai_verdict = ai_res["verdict"]
-            ai_reason  = ai_res["reason"]
-            ai_risk    = ai_res["risk"]
-
-            # Save to cache
-            cache[ck] = {"verdict": ai_verdict, "reason": ai_reason, "risk": ai_risk}
-            if not use_cache:
-                _save_cache(cache)   # save after each call so progress isn't lost
-            time.sleep(0.5)  # gentle rate limiting
 
         active = {
             "direction":  sig["signal"],
@@ -283,9 +229,9 @@ def run_day(candles, prev_close, symbol, cache, use_cache, no_cache):
             "stop_loss":  sig["stop_loss"],
             "score":      sig["score"],
             "push_tier":  push_tier,
-            "ai_verdict": ai_verdict,
-            "ai_reason":  ai_reason,
-            "ai_risk":    ai_risk,
+            "ai_verdict": "CONFIRM",  # All signals here are already AI-confirmed
+            "ai_reason":  sig.get("reasons", ["AI Engine Signal"])[0] if sig.get("reasons") else "AI Engine Signal",
+            "ai_risk":    "N/A",
         }
 
     # EOD close
@@ -380,6 +326,7 @@ def print_results(symbol, all_trades, lot):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--days",     type=int, default=7,   help="Number of trading days")
+    parser.add_argument("--date",     type=str, default=None, help="Specific date to run (YYYY-MM-DD)")
     parser.add_argument("--symbols",  default="NIFTY,BANKNIFTY", help="Comma-separated symbols")
     parser.add_argument("--no-cache", action="store_true",   help="Ignore cache, re-call Gemini for all")
     args = parser.parse_args()
@@ -400,7 +347,13 @@ def main():
         candles = load_candles(symbol)
         by_day  = group_by_day(candles)
         all_days = sorted(by_day.keys())
-        days     = all_days[-args.days:]
+        if args.date:
+            days = [args.date] if args.date in all_days else []
+            if not days:
+                print(f"No data for {args.date} for {symbol}")
+                continue
+        else:
+            days = all_days[-args.days:]
         lot      = notify.LOT_SIZE.get(symbol, 75)
 
         prev_close = None

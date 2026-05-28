@@ -23,7 +23,7 @@ except ImportError:
 
 
 # Lot sizes and strike-spacing (NSE post-2024 revision)
-LOT_SIZE = {"NIFTY": 75, "BANKNIFTY": 15, "SENSEX": 20}
+LOT_SIZE = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20}
 STRIKE_STEP = {"NIFTY": 50, "BANKNIFTY": 100, "SENSEX": 100}
 TARGET_PTS = {"NIFTY": 30, "BANKNIFTY": 60, "SENSEX": 100}
 SL_PTS = {"NIFTY": 18, "BANKNIFTY": 30, "SENSEX": 50}

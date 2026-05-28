@@ -1,8 +1,12 @@
 {
   "permissions": {
     "allow": [
+       "Bash(*)",
+      "PowerShell(*)",
       "PowerShell(python -c \"import ast; ast.parse\\(open\\('app.py'\\).read\\(\\)\\); print\\('app.py: syntax OK'\\)\")",
-      "PowerShell(python -m pip install supabase python-dotenv 2>&1)"
+      "PowerShell(python -m pip install supabase python-dotenv 2>&1)",
+      "Bash(PYTHONIOENCODING=utf-8 python check_time_to_targets.py)",
+      "PowerShell(C:\\\\Python310\\\\python.exe -c \"import sys; sys.path.insert\\(0, r'c:\\\\python310\\\\lib\\\\site-packages'\\); import yfinance as yf; print\\('OK', yf.__version__\\)\")"
     ]
   }
 }

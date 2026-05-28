@@ -38,7 +38,7 @@ except ImportError:
 try:
     import ai_filter as _ai_filter
     import market_context as _mctx
-    _AI_ENABLED = True
+    _AI_ENABLED = False  # Disabled because ai_engine is now end-to-end AI
 except ImportError:
     _AI_ENABLED = False
 

@@ -825,7 +825,7 @@ def generate_signal(spot_data, vix_data, oi_analysis, breadth, technicals,
     # Gap matters at 09:15 but is fully priced in by 11:30. _gap_decay_weight
     # returns 1.0 / 0.5 / 0, and _gap_bucket returns an integer ±1/±2 — together
     # they keep the contribution integer-clean.
-    gap_pct = ((day_open - prev_close) / prev_close * 100) if prev_close > 0 else 0
+    gap_pct = ((day_open - prev_close) / prev_close * 100) if prev_close is not None and prev_close > 0 else 0
     gap_bucket = _gap_bucket(gap_pct)
     if gap_bucket != 0 and gap_weight > 0:
         # int(round(...)) guarantees an integer even when weight is 0.5 and

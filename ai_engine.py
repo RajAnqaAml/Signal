@@ -197,13 +197,14 @@ Avoid: market open first 15 min (before 9:30), last 30 min (after 15:00), expiry
 
 === YOUR ANALYSIS FRAMEWORK ===
 Think through these silently before deciding:
-1. TREND: Are EMAs aligned? Is price making higher highs/lows or lower highs/lows?
-2. MOMENTUM: Last 5 candles — continuation or exhaustion?
-3. OPTION CHAIN: Where is max OI? That is S/R. Is price moving toward or away from max pain?
-4. SMART MONEY: PCR + net OI change = are institutions adding bullish or bearish bets?
-5. VOLATILITY: VIX + IV — is premium buying justified? ATR = expected move per bar
-6. RISK: Any event in next 2 hrs? DTE risk? Time of day risk?
-7. REGIME: Is this a trending day (strong momentum, aligned indicators) or choppy day?
+1. THE SNIPER RULE: If the probability of success is not overwhelmingly high (>90%), output WAIT. Do not force trades. You are a sniper, not a machine gunner.
+2. TREND: Are EMAs aligned? Is price making higher highs/lows or lower highs/lows? If not perfectly clear, WAIT.
+3. MOMENTUM: Last 5 candles — continuation or exhaustion? If exhaustion is visible, WAIT.
+4. OPTION CHAIN: Where is max OI? That is S/R. Is price moving toward or away from max pain?
+5. SMART MONEY: PCR + net OI change = are institutions adding bullish or bearish bets?
+6. VOLATILITY: VIX + IV — is premium buying justified? ATR = expected move per bar
+7. RISK: Any event in next 2 hrs? DTE risk? Time of day risk?
+8. REGIME: Is this a trending day (strong momentum, aligned indicators) or choppy day?
 
 === OUTPUT ===
 Output ONLY valid JSON. No markdown fences, no explanation outside JSON:
@@ -222,9 +223,9 @@ Output ONLY valid JSON. No markdown fences, no explanation outside JSON:
 }}
 
 push_tier rules (be strict — protect capital):
-TIER_1: confidence >= 65 AND regime=TRENDING AND signal != WAIT AND DTE >= 1 AND no blocking event
-TIER_2: confidence 50-64 OR regime=CHOPPY (informational — dashboard only, do not notify phone)
-TIER_3: confidence < 50 OR signal=WAIT OR DTE=0 OR major event in next 2 hrs
+TIER_1: confidence >= 85 AND regime=TRENDING AND signal != WAIT AND DTE >= 1 AND no blocking event
+TIER_2: confidence 65-84 OR regime=CHOPPY (informational — dashboard only, do not notify phone)
+TIER_3: confidence < 65 OR signal=WAIT OR DTE=0 OR major event in next 2 hrs
 """.strip()
 
 
@@ -312,13 +313,6 @@ def generate_signal(
 
         # News context (step 1 — with search)
         news_ctx  = _get_news_context(symbol, now)
-
-        # Guard: hard skip if news says market is closed
-        if any(kw in news_ctx.lower() for kw in ["market closed", "market holiday", "trading holiday", "bank holiday"]):
-            print(f"[ai_engine] {symbol} — holiday detected in news, returning WAIT", flush=True)
-            w = _wait.copy()
-            w["reasons"] = [f"Market holiday: {news_ctx[:80]}"]
-            return w
 
         # Build full prompt
         prompt = _MASTER_PROMPT.format(
