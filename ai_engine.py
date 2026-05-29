@@ -389,7 +389,8 @@ def generate_signal(
         )
         raw = (r.text or "").strip()
 
-        ai_signal = _parse_ai_response(raw, spot, symbol, atr, dte)
+        oc_available = oc_analysis is not None
+        ai_signal = _parse_ai_response(raw, spot, symbol, atr, dte, oc_available=oc_available)
         result    = _to_signal_dict(ai_signal, spot_data, symbol, now, technicals)
 
         print(
@@ -409,7 +410,8 @@ def generate_signal(
 
 # ─── Response parsing & validation ────────────────────────────────────────────
 
-def _parse_ai_response(raw: str, spot: float, symbol: str, atr: float, dte: int) -> dict:
+def _parse_ai_response(raw: str, spot: float, symbol: str, atr: float, dte: int,
+                       oc_available: bool = True) -> dict:
     """Extract and validate JSON from Gemini response."""
     # Strip any markdown fences
     cleaned = re.sub(r"```(?:json)?", "", raw).strip()
@@ -457,6 +459,18 @@ def _parse_ai_response(raw: str, spot: float, symbol: str, atr: float, dte: int)
         tier = "TIER_3"
     if tier not in ("TIER_1", "TIER_2", "TIER_3"):
         tier = "TIER_3"
+
+    # OC-unavailable fallback: lower TIER_1 bar from 85% → 80% when option chain
+    # data is missing. Gemini was told 85% in the prompt, so a genuine 80-84%
+    # TRENDING signal gets misclassified as TIER_2. Override that here.
+    if (not oc_available
+            and tier == "TIER_2"
+            and conf >= 80
+            and regime == "TRENDING"
+            and sig != "WAIT"
+            and dte >= 1):
+        tier = "TIER_1"
+        print(f"[ai_engine] OC unavailable - upgrading {symbol} {sig} {conf}% TRENDING to TIER_1 (80% fallback)", flush=True)
 
     return {
         "signal":       sig,
