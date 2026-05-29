@@ -2,6 +2,7 @@ import json
 import math
 import time
 import traceback
+import urllib.parse
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -203,16 +204,33 @@ class NSEClient:
         )
 
     def fetch_option_chain(self, symbol="NIFTY"):
-        """Fetch full option chain for NIFTY or BANKNIFTY.
-        NSE migrated from /api/option-chain-indices to /api/option-chain-equities.
+        """Fetch full option chain via /api/option-chain-v3 (works for indices).
+        Two-step: get nearest expiry from contract-info, then fetch OC.
+        SENSEX trades on BSE so returns None gracefully.
         """
+        # SENSEX is a BSE product — NSE has no index OC for it
+        if symbol == "SENSEX":
+            return None
+
+        # Step 1: nearest expiry (cached 1h — expiry dates don't change intraday)
+        ci = self._fetch_json(
+            f"/api/option-chain-contract-info?symbol={symbol}",
+            referer=f"{self.BASE_URL}/option-chain",
+            cache_key=f"ocContractInfo_{symbol}",
+            cache_ttl=3600,
+        )
+        expiry = (ci or {}).get("expiryDates", [None])[0]
+
+        # Step 2: fetch OC for nearest expiry
+        ep = f"/api/option-chain-v3?type=Indices&symbol={symbol}"
+        if expiry:
+            ep += f"&expiry={urllib.parse.quote(expiry)}"
         data = self._fetch_json(
-            f"/api/option-chain-equities?symbol={symbol}",
+            ep,
             referer=f"{self.BASE_URL}/option-chain",
             cache_key=f"optionChain_{symbol}",
             cache_ttl=20,
         )
-        # Return None if NSE sends back empty dict (API down / market closed)
         if not data or not data.get("records"):
             return None
         return data
@@ -543,9 +561,20 @@ def analyze_option_chain(oc_data, spot, symbol="NIFTY", now_ist=None):
     nearest_expiry = expiries[0]
     step = 50 if symbol == "NIFTY" else 100  # BANKNIFTY and SENSEX both use 100
 
+    # option-chain-v3 uses DD-MM-YYYY in CE/PE sub-objects; old API used DD-Mon-YYYY
+    # at row level. Normalise so both formats match.
+    try:
+        nearest_expiry_alt = datetime.strptime(nearest_expiry, "%d-%b-%Y").strftime("%d-%m-%Y")
+    except Exception:
+        nearest_expiry_alt = nearest_expiry
+
     strikes = {}  # strike -> {"ce_oi", "pe_oi", "ce_chg", "pe_chg", "ce_iv", "pe_iv"}
     for row in rows:
-        if row.get("expiryDate") != nearest_expiry:
+        # Row-level expiryDate (old API) or CE/PE-level (new option-chain-v3 API)
+        row_expiry = (row.get("expiryDate")
+                      or (row.get("CE") or {}).get("expiryDate")
+                      or (row.get("PE") or {}).get("expiryDate"))
+        if row_expiry and row_expiry not in (nearest_expiry, nearest_expiry_alt):
             continue
         strike = row.get("strikePrice")
         if strike is None:
