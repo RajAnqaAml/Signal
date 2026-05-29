@@ -184,6 +184,36 @@ def send_signal_alert(symbol: str, signal_row: dict) -> bool:
     return _post(url, title, body_text, priority=priority, tags=tags)
 
 
+def send_watch_alert(symbol: str, signal_row: dict) -> bool:
+    """Send a silent WATCH alert for TIER_2 signals.
+    Uses ntfy priority=low — arrives in notification tray with no sound/vibration.
+    """
+    url = _topic_url()
+    if not url:
+        return False
+
+    direction = signal_row.get("signal", "NEUTRAL")
+    if direction in ("NEUTRAL", "WAIT"):
+        return False
+
+    spot   = float(signal_row.get("spot_price") or signal_row.get("entry") or 0)
+    conf   = float(signal_row.get("confidence", 0) or 0)
+    regime = signal_row.get("ai_regime", "")
+    reason = (signal_row.get("ai_reasoning", "") or "")[:200]
+
+    icon  = "PUT" if direction == "PUT" else "CALL"
+    title = f"[WATCH] {symbol} {icon} {conf:.0f}% — {regime}"
+    body  = "\n".join([
+        f"Spot: {spot:.2f}  |  Conf: {conf:.0f}%  |  Regime: {regime}",
+        "",
+        reason if reason else "No AI reasoning.",
+        "",
+        "TIER_2 watch — not high conviction. No action needed.",
+    ])
+    tags = ["eyes"]
+    return _post(url, title, body, priority="low", tags=tags)
+
+
 def send_exit_alert(symbol: str, prior_direction: str, current_state: str,
                      entry_spot: float = None, current_spot: float = None,
                      held_min: int = None) -> bool:

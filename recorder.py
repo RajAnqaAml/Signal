@@ -43,7 +43,8 @@ except ImportError:
     _AI_ENABLED = False
 
 
-NOTIFY_COOLDOWN_MIN = 0  # no cooldown — push on every signal transition
+NOTIFY_COOLDOWN_MIN       = 15  # cooldown for TIER_1 loud alerts
+NOTIFY_WATCH_COOLDOWN_MIN = 30  # cooldown for TIER_2 silent watch alerts
 
 
 def _previous_signal(symbol: str) -> str:
@@ -219,13 +220,21 @@ def _maybe_notify(symbol: str, sig_block: dict, current_spot: float = None):
     if prev == direction:
         return  # continuation, silent
 
-    # Tier gate: only TIER_1 signals push to phone (Tier 2 -> WATCH on dashboard).
-    if push_tier != "TIER_1":
-        print(
-            f"[notify] {symbol} {direction} suppressed: push_tier={push_tier} "
-            f"(blocks: {'; '.join(tier_blocks[:2])})",
-            flush=True,
-        )
+    # Tier gate: TIER_1 = loud push, TIER_2 = silent watch, TIER_3 = silent
+    if push_tier not in ("TIER_1", "TIER_2"):
+        return
+
+    if push_tier == "TIER_2":
+        age = _last_push_age_min(symbol, direction)
+        if age is not None and age <= NOTIFY_WATCH_COOLDOWN_MIN:
+            print(
+                f"[notify] {symbol} {direction} TIER_2 watch suppressed: "
+                f"{age:.1f} min ago (cooldown {NOTIFY_WATCH_COOLDOWN_MIN} min)",
+                flush=True,
+            )
+            return
+        ok = _notify.send_watch_alert(symbol, sig_block)
+        print(f"[notify] {symbol} {direction} TIER_2 WATCH -> {'sent' if ok else 'FAIL'}", flush=True)
         return
 
     # Cooldown check: same-direction push fired within cooldown window?
