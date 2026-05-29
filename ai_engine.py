@@ -32,8 +32,32 @@ import notify
 _MODEL   = "gemini-2.0-flash"
 _client  = None
 
-# In-session news cache:  (symbol, date_str)  →  news_text
+# In-process news cache (fastest — reused within one --once run)
 _news_cache: dict = {}
+
+# File-based news cache (persists across GH Actions runs via actions/cache)
+_NEWS_CACHE_FILE = "news_cache.json"
+
+
+def _file_cache_load() -> dict:
+    try:
+        import pathlib
+        p = pathlib.Path(_NEWS_CACHE_FILE)
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _file_cache_save(cache: dict):
+    try:
+        import pathlib
+        pathlib.Path(_NEWS_CACHE_FILE).write_text(
+            json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as e:
+        print(f"[ai_engine] news cache write failed: {e}", flush=True)
 
 # Expiry config
 _EXPIRY_DOW  = {"NIFTY": 1, "BANKNIFTY": 1, "SENSEX": 3}
@@ -160,13 +184,28 @@ def _format_option_chain(oc: dict | None, symbol: str) -> str:
 
 
 def _get_news_context(symbol: str, now: datetime) -> str:
-    """Fetch today's news context via Gemini Search (cached per symbol per day)."""
-    date_str = now.strftime("%d %B %Y")
+    """Fetch today's news context via Gemini Search.
+
+    Cache hierarchy (fastest → slowest):
+      1. In-process dict  — reused within one --once run (free)
+      2. news_cache.json  — persists across GH Actions runs via actions/cache
+      3. Gemini API call  — only on true cache miss (once per symbol per day)
+    """
+    date_str  = now.strftime("%d %B %Y")
     cache_key = f"{symbol}|{date_str}"
 
+    # Layer 1: in-process
     if cache_key in _news_cache:
         return _news_cache[cache_key]
 
+    # Layer 2: file cache
+    file_cache = _file_cache_load()
+    if cache_key in file_cache:
+        _news_cache[cache_key] = file_cache[cache_key]
+        print(f"[ai_engine] news cache HIT (file): {symbol}", flush=True)
+        return file_cache[cache_key]
+
+    # Layer 3: Gemini API call
     try:
         from google import genai
         from google.genai import types
@@ -187,7 +226,11 @@ def _get_news_context(symbol: str, now: datetime) -> str:
             ),
         )
         ctx = (r.text or "No major events found.").strip()
+        # Save to both layers
         _news_cache[cache_key] = ctx
+        file_cache[cache_key]  = ctx
+        _file_cache_save(file_cache)
+        print(f"[ai_engine] news fetched + cached (file): {symbol}", flush=True)
         return ctx
     except Exception as e:
         print(f"[ai_engine] news fetch failed: {e}", flush=True)

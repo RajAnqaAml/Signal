@@ -60,6 +60,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Set date (IST)
+        run: echo "IST_DATE=$(TZ=Asia/Kolkata date +%Y-%m-%d)" >> $GITHUB_ENV
+
+      - name: Restore news cache
+        uses: actions/cache@v4
+        with:
+          path: news_cache.json
+          key: news-cache-${{ env.IST_DATE }}
+
       - name: Take snapshot
         if: github.event.schedule != '30 10 * * 1-5'
         env:
