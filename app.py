@@ -1450,6 +1450,79 @@ def build_signals_payload(now_ist=None, verbose=True):
     }
 
 
+# ─── CPR ───────────────────────────────────────────────────────────────────────
+
+def compute_cpr(symbol: str, now_ist: datetime) -> dict | None:
+    """Compute Central Pivot Range from previous trading day's OHLC.
+
+    Returns dict with pivot, TC, BC, width_pct, width_label, position context.
+    Returns None if prior-day candles are unavailable.
+    """
+    import db as _db
+    candles = _db.get_candles(symbol, interval=5)
+    if not candles:
+        return None
+
+    # Group 5-min candles by IST date
+    by_day: dict = {}
+    for c in candles:
+        ts_str = c["ts"].replace("Z", "+00:00") if c["ts"].endswith("Z") else c["ts"]
+        try:
+            dt  = datetime.fromisoformat(ts_str).astimezone(IST)
+            day = dt.date()
+        except Exception:
+            continue
+        if c["high"] is None or c["low"] is None or c["close"] is None:
+            continue
+        if day not in by_day:
+            by_day[day] = {"highs": [], "lows": [], "closes": []}
+        by_day[day]["highs"].append(float(c["high"]))
+        by_day[day]["lows"].append(float(c["low"]))
+        by_day[day]["closes"].append(float(c["close"]))
+
+    today     = now_ist.date()
+    prev_days = sorted([d for d in by_day if d < today], reverse=True)
+    if not prev_days:
+        return None
+
+    prev = prev_days[0]
+    d    = by_day[prev]
+    if not d["highs"]:
+        return None
+
+    prev_high  = max(d["highs"])
+    prev_low   = min(d["lows"])
+    prev_close = d["closes"][-1]
+
+    pivot     = (prev_high + prev_low + prev_close) / 3
+    bc        = (prev_high + prev_low) / 2
+    tc        = 2 * pivot - bc          # symmetric around pivot
+    width_pct = abs(tc - bc) / pivot * 100
+
+    if width_pct < 0.25:
+        width_label = "NARROW"
+        day_type    = "Strong TRENDING day expected - high conviction moves likely"
+    elif width_pct > 0.45:
+        width_label = "WIDE"
+        day_type    = "CHOPPY day expected - avoid momentum buys, fade extremes"
+    else:
+        width_label = "MODERATE"
+        day_type    = "Mixed - wait for clear breakout before committing"
+
+    return {
+        "pivot":      round(pivot,     1),
+        "tc":         round(tc,        1),
+        "bc":         round(bc,        1),
+        "width_pct":  round(width_pct, 3),
+        "width_label":width_label,
+        "day_type":   day_type,
+        "prev_high":  round(prev_high,  1),
+        "prev_low":   round(prev_low,   1),
+        "prev_close": round(prev_close, 1),
+        "prev_date":  str(prev),
+    }
+
+
 # ─── AI Engine payload builder ─────────────────────────────────────────────────
 
 def _sanitize(obj):
@@ -1492,6 +1565,19 @@ def build_ai_signals_payload(now_ist=None, verbose=True):
 
     results = {}
 
+    # Pre-compute CPR for all symbols (uses DB candles — zero API calls)
+    cpr_cache = {}
+    for _sym in ["NIFTY", "BANKNIFTY", "SENSEX"]:
+        try:
+            cpr_cache[_sym] = compute_cpr(_sym, now_ist)
+            if cpr_cache[_sym] and verbose:
+                c = cpr_cache[_sym]
+                print(f"[AI Signals] {_sym} CPR: TC={c['tc']} BC={c['bc']} "
+                      f"width={c['width_pct']:.2f}% ({c['width_label']})")
+        except Exception as _e:
+            cpr_cache[_sym] = None
+            print(f"[AI Signals] {_sym} CPR failed: {_e}", flush=True)
+
     # ── NIFTY and BANKNIFTY (NSE) ──────────────────────────────────────────
     for symbol in ["NIFTY", "BANKNIFTY"]:
         try:
@@ -1527,7 +1613,8 @@ def build_ai_signals_payload(now_ist=None, verbose=True):
             }
 
             signal = _ai.generate_signal(
-                symbol, spot_data, oc_analysis, technicals, vix_data, now_ist=now_ist
+                symbol, spot_data, oc_analysis, technicals, vix_data,
+                now_ist=now_ist, cpr_data=cpr_cache.get(symbol)
             )
 
             if verbose:
@@ -1575,7 +1662,8 @@ def build_ai_signals_payload(now_ist=None, verbose=True):
                 }
 
                 signal = _ai.generate_signal(
-                    symbol, spot_data, oc_analysis, technicals, vix_data, now_ist=now_ist
+                    symbol, spot_data, oc_analysis, technicals, vix_data,
+                    now_ist=now_ist, cpr_data=cpr_cache.get(symbol)
                 )
 
                 if verbose:

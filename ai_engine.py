@@ -183,6 +183,32 @@ def _format_option_chain(oc: dict | None, symbol: str) -> str:
     return "\n".join(lines) if lines else "Option chain: parsed but key fields missing"
 
 
+def _format_cpr(cpr: dict | None, spot: float) -> str:
+    """Format CPR data for the master prompt."""
+    if not cpr:
+        return "CPR: unavailable (no prior-day candle data)"
+
+    tc, bc, pivot = cpr["tc"], cpr["bc"], cpr["pivot"]
+    width_pct     = cpr["width_pct"]
+    width_label   = cpr["width_label"]
+    day_type      = cpr["day_type"]
+
+    if spot > tc:
+        position = f"ABOVE TC ({tc}) - BULLISH day bias confirmed"
+    elif spot < bc:
+        position = f"BELOW BC ({bc}) - BEARISH day bias confirmed"
+    else:
+        position = f"INSIDE CPR ({bc}-{tc}) - no bias yet, wait for breakout"
+
+    return (
+        f"Pivot={pivot} | TC={tc} | BC={bc} | Width={width_pct:.2f}% ({width_label})\n"
+        f"Day type: {day_type}\n"
+        f"Spot vs CPR: {position}\n"
+        f"(Calculated from {cpr['prev_date']}: H={cpr['prev_high']} "
+        f"L={cpr['prev_low']} C={cpr['prev_close']})"
+    )
+
+
 def _get_news_context(symbol: str, now: datetime) -> str:
     """Fetch today's news context via Gemini Search.
 
@@ -259,6 +285,9 @@ Day High: {day_high} | Day Low: {day_low}
 === OPTION CHAIN (Smart Money Positioning) ===
 {option_chain}
 
+=== CPR — CENTRAL PIVOT RANGE ===
+{cpr}
+
 === MARKET CONTEXT ===
 India VIX: {vix} ({vix_trend}) — {vix_desc}
 US market (prev close): {us_market}
@@ -278,7 +307,7 @@ Think through these silently before deciding:
 5. SMART MONEY: PCR + net OI change = are institutions adding bullish or bearish bets? If OC unavailable — SKIP, do NOT reduce confidence.
 6. VOLATILITY: VIX + IV — is premium buying justified? ATR = expected move per bar
 7. RISK: Any event in next 2 hrs? DTE risk? Time of day risk?
-8. REGIME: Is this a trending day (strong momentum, aligned indicators) or choppy day?
+8. REGIME + CPR: Use CPR as your day-type anchor. Narrow CPR = trending day, Wide CPR = choppy day. Is price above TC (bullish) or below BC (bearish)? CPR is a fact — do not contradict it without strong reason.
 
 === OUTPUT ===
 Output ONLY valid JSON. No markdown fences, no explanation outside JSON:
@@ -312,6 +341,7 @@ def generate_signal(
     technicals: dict,
     vix_data: dict,
     now_ist: datetime = None,
+    cpr_data: dict | None = None,
 ) -> dict:
     """AI-powered signal generator. Drop-in replacement for rule-based generate_signal().
 
@@ -384,7 +414,10 @@ def generate_signal(
         )
 
         # Option chain
-        oc_str = _format_option_chain(oc_analysis, symbol)
+        oc_str  = _format_option_chain(oc_analysis, symbol)
+
+        # CPR (Central Pivot Range — pre-market day type anchor)
+        cpr_str = _format_cpr(cpr_data, spot)
 
         # Market context
         from market_context import _get_us_market, _get_gift_nifty
@@ -413,6 +446,7 @@ def generate_signal(
             day_low        = spot_data.get("low", spot),
             price_action   = pa_str,
             option_chain   = oc_str,
+            cpr            = cpr_str,
             vix            = vix_val,
             vix_trend      = vix_trend,
             vix_desc       = vix_desc,
