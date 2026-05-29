@@ -39,6 +39,33 @@ _news_cache: dict = {}
 _EXPIRY_DOW  = {"NIFTY": 1, "BANKNIFTY": 1, "SENSEX": 3}
 _EXPIRY_NAME = {"NIFTY": "Tuesday", "BANKNIFTY": "Tuesday", "SENSEX": "Thursday"}
 
+# ─── Approval gate ─────────────────────────────────────────────────────────────
+# Local runs ask once before the first Gemini call.
+# GH Actions / CI auto-approves (no TTY, GITHUB_ACTIONS env var set).
+
+_approved   = False   # flips to True after user says yes (or auto-approved)
+_call_count = 0       # total Gemini calls this process
+
+
+def _require_approval(caller: str = ""):
+    """Block until user approves Gemini usage. No-op on CI / GH Actions."""
+    global _approved
+    if _approved:
+        return
+    import sys
+    # Auto-approve in CI / non-interactive environments
+    if os.environ.get("GITHUB_ACTIONS") or os.environ.get("CI") or not sys.stdin.isatty():
+        _approved = True
+        return
+    label = f" ({caller})" if caller else ""
+    print(f"\n[ai_engine] About to call Gemini API{label}.")
+    print("[ai_engine] This costs API quota/tokens. Approve? [y/N]: ", end="", flush=True)
+    ans = sys.stdin.readline().strip().lower()
+    if ans != "y":
+        raise SystemExit("[ai_engine] Gemini call cancelled. Exiting.")
+    _approved = True
+    print("[ai_engine] Approved. All Gemini calls in this session will proceed silently.", flush=True)
+
 
 # ─── Gemini client ─────────────────────────────────────────────────────────────
 
@@ -258,6 +285,12 @@ def generate_signal(
     -------
     dict  compatible with recorder.py / DB / dashboard signal format
     """
+    global _call_count
+    _require_approval(caller=f"{symbol} @ {now_ist.strftime('%H:%M') if now_ist else 'now'}")
+    _call_count += 1
+    if _call_count % 20 == 0:
+        print(f"[ai_engine] Gemini calls this session: {_call_count}", flush=True)
+
     _wait = _make_wait(spot_data, symbol)
 
     try:

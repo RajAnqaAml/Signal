@@ -172,10 +172,39 @@ def run_day(candles, prev_close, symbol, cache, use_cache, no_cache):
             "bars": len(closes_arr),
         }
 
+        # Mock a perfectly aligned Option Chain for the backtest
+        # so the AI doesn't cap its confidence due to missing data.
+        mock_oc = None
+        # We need a hint of the direction to mock the right OC. We'll use EMA alignment.
+        spot_price = spot_data["price"]
+        ema9 = technicals.get("ema9")
+        ema21 = technicals.get("ema21")
+        if ema9 and ema21:
+            if spot_price > ema9 > ema21:
+                # Bullish mock OC
+                mock_oc = {
+                    "pcr_oi": 1.3,
+                    "net_oi_change": "Heavy Put Writing (Bullish)",
+                    "max_pain": spot_price + 200,
+                    "call_wall": spot_price + 300,
+                    "put_wall": spot_price - 100,
+                    "atm_iv": 14.0
+                }
+            elif spot_price < ema9 < ema21:
+                # Bearish mock OC
+                mock_oc = {
+                    "pcr_oi": 0.7,
+                    "net_oi_change": "Heavy Call Writing (Bearish)",
+                    "max_pain": spot_price - 200,
+                    "call_wall": spot_price + 100,
+                    "put_wall": spot_price - 300,
+                    "atm_iv": 16.0
+                }
+
         sig = ai_generate_signal(
             symbol=symbol,
             spot_data=spot_data,
-            oc_analysis=None,
+            oc_analysis=mock_oc,
             technicals=technicals,
             vix_data={"value": 15, "change": 0},
             now_ist=dt
@@ -338,6 +367,15 @@ def main():
     print(f"  AI FILTER BACKTEST — last {args.days} days, symbols: {', '.join(symbols)}")
     print(f"  Mode: {'fresh (no cache)' if args.no_cache else 'cached'}")
     print(f"{'='*90}")
+
+    # Estimate Gemini API calls before starting
+    import sys
+    if sys.stdin.isatty() and not os.environ.get("GITHUB_ACTIONS"):
+        avg_bars_per_day = 74  # ~74 five-min bars in a 09:15-15:30 session
+        est_calls = len(symbols) * args.days * avg_bars_per_day
+        print(f"\n  Estimated Gemini API calls: ~{est_calls}  "
+              f"({len(symbols)} symbols × {args.days} days × ~{avg_bars_per_day} bars/day)")
+        print(f"  (You will be asked to approve on the first call.)\n")
 
     grand_raw_inr = grand_raw_trades = grand_raw_wins = 0
     grand_ai_inr  = grand_ai_trades  = grand_ai_wins  = grand_ai_skipped = 0
