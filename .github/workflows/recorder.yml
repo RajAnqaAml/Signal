@@ -8,10 +8,10 @@ name: NSE Signal Recorder
 #   - URL: POST https://api.github.com/repos/<owner>/<repo>/dispatches
 #   - Body: {"event_type": "run-recorder"}
 #   - Header: Authorization: Bearer <fine-grained PAT with Actions:write>
-#   - Schedule: every 5 min from 03:45 UTC (09:15 IST) to 10:05 UTC (15:35 IST), Mon-Fri
+#   - Schedule: every 2 min from 03:45 UTC (09:15 IST) to 10:05 UTC (15:35 IST), Mon-Fri
 #   - First fire MUST be 03:45 UTC sharp to capture the market open
 #
-# *** FALLBACK trigger: GH-native cron (every 15 min) ***
+# *** FALLBACK trigger: GH-native cron (every 10 min) ***
 # GitHub free-tier native cron can lag 30+ min during peak hours, so we only
 # use it as a sparse backup. Cron-job.org is the source of truth for timing.
 
@@ -20,8 +20,8 @@ on:
     types: [run-recorder]
 
   schedule:
-    # Every 15 min from 03:45-10:00 UTC (09:15-15:30 IST). Backup only.
-    - cron: '0,15,30,45 3-10 * * 1-5'
+    # Every 10 min from 03:45-10:00 UTC (09:15-15:30 IST). Backup only.
+    - cron: '0,10,20,30,40,50 3-10 * * 1-5'
     # Daily candle backfill at 10:30 UTC (16:00 IST) — 30 min after market close.
     - cron: '30 10 * * 1-5'
 
