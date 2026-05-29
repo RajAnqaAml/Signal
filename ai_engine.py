@@ -93,7 +93,11 @@ def _format_recent_price(closes, highs, lows, spot, ema9, ema21, atr, supertrend
 def _format_option_chain(oc: dict | None, symbol: str) -> str:
     """Format option chain analysis for AI context."""
     if not oc:
-        return "Option chain: unavailable"
+        return (
+            "Option chain: NSE API currently unavailable. "
+            "DO NOT penalize confidence for missing OC — evaluate on technicals, "
+            "price action, news, and VIX alone. Full TIER_1 confidence is possible without OC."
+        )
 
     lines = []
     pcr = oc.get("pcr_oi") or oc.get("pcr_total")
@@ -200,8 +204,8 @@ Think through these silently before deciding:
 1. THE SNIPER RULE: If the probability of success is not overwhelmingly high (>90%), output WAIT. Do not force trades. You are a sniper, not a machine gunner.
 2. TREND: Are EMAs aligned? Is price making higher highs/lows or lower highs/lows? If not perfectly clear, WAIT.
 3. MOMENTUM: Last 5 candles — continuation or exhaustion? If exhaustion is visible, WAIT.
-4. OPTION CHAIN: Where is max OI? That is S/R. Is price moving toward or away from max pain?
-5. SMART MONEY: PCR + net OI change = are institutions adding bullish or bearish bets?
+4. OPTION CHAIN: Where is max OI? That is S/R. Is price moving toward or away from max pain? If OC shows "unavailable" — SKIP this step, do NOT reduce confidence.
+5. SMART MONEY: PCR + net OI change = are institutions adding bullish or bearish bets? If OC unavailable — SKIP, do NOT reduce confidence.
 6. VOLATILITY: VIX + IV — is premium buying justified? ATR = expected move per bar
 7. RISK: Any event in next 2 hrs? DTE risk? Time of day risk?
 8. REGIME: Is this a trending day (strong momentum, aligned indicators) or choppy day?

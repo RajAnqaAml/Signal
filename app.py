@@ -171,18 +171,13 @@ class NSEClient:
         )
 
     def fetch_market_breadth(self):
-        """Fetch equity stock indices for market breadth (advances/declines)."""
-        data = self._fetch_json(
-            "/api/equity-stockIndices?index=NIFTY%2050",
-            referer=f"{self.BASE_URL}/market-data/live-equity-market",
-            cache_key="equityNifty50",
-        )
-        if data and "advance" in data:
-            adv = data["advance"]
+        """Fetch market breadth (advances/declines) from allIndices."""
+        data = self.fetch_all_indices()
+        if data:
             return {
-                "advances": int(adv.get("advances", 0)),
-                "declines": int(adv.get("declines", 0)),
-                "unchanged": int(adv.get("unchanged", 0)),
+                "advances": int(data.get("advances", 0)),
+                "declines": int(data.get("declines", 0)),
+                "unchanged": int(data.get("unchanged", 0)),
             }
         return {"advances": 0, "declines": 0, "unchanged": 0}
 
@@ -208,13 +203,19 @@ class NSEClient:
         )
 
     def fetch_option_chain(self, symbol="NIFTY"):
-        """Fetch full option chain for NIFTY or BANKNIFTY."""
-        return self._fetch_json(
-            f"/api/option-chain-indices?symbol={symbol}",
+        """Fetch full option chain for NIFTY or BANKNIFTY.
+        NSE migrated from /api/option-chain-indices to /api/option-chain-equities.
+        """
+        data = self._fetch_json(
+            f"/api/option-chain-equities?symbol={symbol}",
             referer=f"{self.BASE_URL}/option-chain",
             cache_key=f"optionChain_{symbol}",
             cache_ttl=20,
         )
+        # Return None if NSE sends back empty dict (API down / market closed)
+        if not data or not data.get("records"):
+            return None
+        return data
 
     def fetch_market_status(self):
         """Fetch NSE market-status (authoritative for trading holidays)."""
