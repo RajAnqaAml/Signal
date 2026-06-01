@@ -209,6 +209,34 @@ def _format_cpr(cpr: dict | None, spot: float) -> str:
     )
 
 
+def _format_streak(streak: dict | None) -> str:
+    """Format signal streak data for the master prompt."""
+    if not streak or streak.get("count", 0) < 2:
+        return "No established streak yet (session just started or signal just flipped)."
+
+    sig     = streak.get("signal", "WAIT")
+    count   = streak.get("count", 0)
+    minutes = streak.get("minutes", 0)
+
+    if sig == "WAIT":
+        return f"Engine has been WAITING for {count} consecutive snapshots (~{minutes} min) — no directional conviction."
+
+    strength = (
+        "CONFIRMED INTRADAY TREND" if count >= 15 else
+        "Developing trend"         if count >= 8  else
+        "Early signal"
+    )
+    action = (
+        "OVERRIDE any CHOPPY classification - this is a TRENDING move." if count >= 15 else
+        "Consider upgrading regime if EMAs confirm direction."           if count >= 8  else
+        "Too early to call trend - wait for more confirmation."
+    )
+    return (
+        f"{sig} signal sustained for {count} consecutive snapshots (~{minutes} min) - {strength}.\n"
+        f"Instruction: {action}"
+    )
+
+
 def _get_news_context(symbol: str, now: datetime) -> str:
     """Fetch today's news context via Gemini Search.
 
@@ -288,6 +316,9 @@ Day High: {day_high} | Day Low: {day_low}
 === CPR — CENTRAL PIVOT RANGE ===
 {cpr}
 
+=== SIGNAL STREAK (Engine Memory) ===
+{streak}
+
 === MARKET CONTEXT ===
 India VIX: {vix} ({vix_trend}) — {vix_desc}
 US market (prev close): {us_market}
@@ -307,7 +338,11 @@ Think through these silently before deciding:
 5. SMART MONEY: PCR + net OI change = are institutions adding bullish or bearish bets? If OC unavailable — SKIP, do NOT reduce confidence.
 6. VOLATILITY: VIX + IV — is premium buying justified? ATR = expected move per bar
 7. RISK: Any event in next 2 hrs? DTE risk? Time of day risk?
-8. REGIME + CPR: Use CPR as your day-type anchor. Narrow CPR = trending day, Wide CPR = choppy day. Is price above TC (bullish) or below BC (bearish)? CPR is a fact — do not contradict it without strong reason.
+8. REGIME: Combine CPR + Signal Streak to classify the day:
+   - Streak >= 15 snapshots (~30 min) in one direction AND EMAs aligned = TRENDING. Wide CPR does NOT override a sustained move.
+   - Streak < 10 AND price oscillating = CHOPPY.
+   - CPR sets the opening bias only. Sustained price action is the final arbiter.
+   - NEVER call CHOPPY when price has been making consistent lower lows (or higher highs) for 30+ min.
 
 === OUTPUT ===
 Output ONLY valid JSON. No markdown fences, no explanation outside JSON:
@@ -342,6 +377,7 @@ def generate_signal(
     vix_data: dict,
     now_ist: datetime = None,
     cpr_data: dict | None = None,
+    streak_data: dict | None = None,
 ) -> dict:
     """AI-powered signal generator. Drop-in replacement for rule-based generate_signal().
 
@@ -417,7 +453,10 @@ def generate_signal(
         oc_str  = _format_option_chain(oc_analysis, symbol)
 
         # CPR (Central Pivot Range — pre-market day type anchor)
-        cpr_str = _format_cpr(cpr_data, spot)
+        cpr_str    = _format_cpr(cpr_data, spot)
+
+        # Signal streak (engine memory — consecutive same-direction snapshots)
+        streak_str = _format_streak(streak_data)
 
         # Market context
         from market_context import _get_us_market, _get_gift_nifty
@@ -447,6 +486,7 @@ def generate_signal(
             price_action   = pa_str,
             option_chain   = oc_str,
             cpr            = cpr_str,
+            streak         = streak_str,
             vix            = vix_val,
             vix_trend      = vix_trend,
             vix_desc       = vix_desc,

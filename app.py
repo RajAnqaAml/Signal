@@ -1523,6 +1523,53 @@ def compute_cpr(symbol: str, now_ist: datetime) -> dict | None:
     }
 
 
+# ─── Signal streak ─────────────────────────────────────────────────────────────
+
+def compute_signal_streak(symbol: str) -> dict:
+    """Count consecutive same-direction snapshots from the most recent DB rows.
+
+    Returns {"signal": "PUT"|"CALL"|"WAIT", "count": N, "minutes": N*2}.
+    Used to give Gemini memory of sustained trends across 2-min runs.
+    """
+    import db as _db
+    cli = _db.client(service=False) or _db.client(service=True)
+    if cli is None:
+        return {"signal": "UNKNOWN", "count": 0, "minutes": 0}
+    try:
+        resp = (
+            cli.table("snapshots")
+            .select("ts,raw_payload")
+            .eq("symbol", symbol)
+            .order("ts", desc=True)
+            .limit(60)
+            .execute()
+        )
+        rows = resp.data or []
+    except Exception:
+        return {"signal": "UNKNOWN", "count": 0, "minutes": 0}
+
+    signals = []
+    for r in rows:
+        raw = r.get("raw_payload") or {}
+        sig = raw.get("signal", {}) if isinstance(raw, dict) else {}
+        s   = sig.get("signal", "")
+        if s in ("CALL", "PUT", "WAIT"):
+            signals.append(s)
+
+    if not signals:
+        return {"signal": "UNKNOWN", "count": 0, "minutes": 0}
+
+    current = signals[0]
+    count   = 0
+    for s in signals:
+        if s == current:
+            count += 1
+        else:
+            break
+
+    return {"signal": current, "count": count, "minutes": count * 2}
+
+
 # ─── AI Engine payload builder ─────────────────────────────────────────────────
 
 def _sanitize(obj):
@@ -1565,7 +1612,17 @@ def build_ai_signals_payload(now_ist=None, verbose=True):
 
     results = {}
 
-    # Pre-compute CPR for all symbols (uses DB candles — zero API calls)
+    # Pre-compute CPR + signal streak for all symbols (DB reads — zero API calls)
+    streak_cache = {}
+    for _sym in ["NIFTY", "BANKNIFTY", "SENSEX"]:
+        try:
+            streak_cache[_sym] = compute_signal_streak(_sym)
+            s = streak_cache[_sym]
+            if s["count"] >= 2 and verbose:
+                print(f"[AI Signals] {_sym} streak: {s['signal']} x{s['count']} (~{s['minutes']} min)")
+        except Exception as _e:
+            streak_cache[_sym] = {"signal": "UNKNOWN", "count": 0, "minutes": 0}
+
     cpr_cache = {}
     for _sym in ["NIFTY", "BANKNIFTY", "SENSEX"]:
         try:
@@ -1614,7 +1671,8 @@ def build_ai_signals_payload(now_ist=None, verbose=True):
 
             signal = _ai.generate_signal(
                 symbol, spot_data, oc_analysis, technicals, vix_data,
-                now_ist=now_ist, cpr_data=cpr_cache.get(symbol)
+                now_ist=now_ist, cpr_data=cpr_cache.get(symbol),
+                streak_data=streak_cache.get(symbol)
             )
 
             if verbose:
@@ -1663,7 +1721,8 @@ def build_ai_signals_payload(now_ist=None, verbose=True):
 
                 signal = _ai.generate_signal(
                     symbol, spot_data, oc_analysis, technicals, vix_data,
-                    now_ist=now_ist, cpr_data=cpr_cache.get(symbol)
+                    now_ist=now_ist, cpr_data=cpr_cache.get(symbol),
+                    streak_data=streak_cache.get(symbol)
                 )
 
                 if verbose:
