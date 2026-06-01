@@ -47,6 +47,37 @@ NOTIFY_COOLDOWN_MIN       = 15  # cooldown for TIER_1 loud alerts
 NOTIFY_WATCH_COOLDOWN_MIN = 30  # cooldown for TIER_2 silent watch alerts
 
 
+def _consecutive_count(symbol: str, direction: str) -> int:
+    """Count how many of the most recent snapshots have the same direction.
+    Used for the 3-strike TIER_2 gate — only alert after 3 consecutive same signal.
+    """
+    if _db is None or not _db.is_configured():
+        return 0
+    cli = _db.client(service=False) or _db.client(service=True)
+    if cli is None:
+        return 0
+    try:
+        resp = (
+            cli.table("snapshots")
+            .select("raw_payload")
+            .eq("symbol", symbol)
+            .order("ts", desc=True)
+            .limit(5)
+            .execute()
+        )
+        count = 0
+        for r in (resp.data or []):
+            raw = r.get("raw_payload") or {}
+            sig = raw.get("signal", {}) if isinstance(raw, dict) else {}
+            if sig.get("signal", "") == direction:
+                count += 1
+            else:
+                break
+        return count
+    except Exception:
+        return 0
+
+
 def _previous_signal(symbol: str) -> str:
     """Return the previous snapshot's signal for symbol ('CALL'/'PUT'/'NEUTRAL'/'').
     Used so we only push notifications on TRANSITIONS, not on every continuation.
@@ -259,6 +290,27 @@ def _maybe_notify(symbol: str, sig_block: dict, current_spot: float = None):
         return
 
     if push_tier == "TIER_2":
+        # Gate 1: No TIER_2 alerts before 09:45 IST — opening 30 min is noise
+        _now = datetime.now(tz=IST)
+        if _now.hour * 60 + _now.minute < 9 * 60 + 45:
+            print(
+                f"[notify] {symbol} {direction} TIER_2 suppressed: "
+                f"before 09:45 IST (opening noise gate)",
+                flush=True,
+            )
+            return
+
+        # Gate 2: 3-strike rule — must hold same direction 3+ consecutive snaps
+        streak = _consecutive_count(symbol, direction)
+        if streak < 3:
+            print(
+                f"[notify] {symbol} {direction} TIER_2 suppressed: "
+                f"streak={streak} (need 3 consecutive)",
+                flush=True,
+            )
+            return
+
+        # Gate 3: cooldown
         age = _last_push_age_min(symbol, direction)
         if age is not None and age <= NOTIFY_WATCH_COOLDOWN_MIN:
             print(
@@ -267,8 +319,13 @@ def _maybe_notify(symbol: str, sig_block: dict, current_spot: float = None):
                 flush=True,
             )
             return
+
         ok = _notify.send_watch_alert(symbol, sig_block)
-        print(f"[notify] {symbol} {direction} TIER_2 WATCH -> {'sent' if ok else 'FAIL'}", flush=True)
+        print(
+            f"[notify] {symbol} {direction} TIER_2 WATCH (streak={streak}) "
+            f"-> {'sent' if ok else 'FAIL'}",
+            flush=True,
+        )
         return
 
     # Cooldown check: same-direction push fired within cooldown window?
