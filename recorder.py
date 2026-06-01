@@ -175,6 +175,34 @@ def _last_active_direction_entry(symbol: str, since_min: int = 240):
         return None
 
 
+def _previous_tier(symbol: str) -> str:
+    """Return the previous snapshot's push_tier for symbol.
+    Used to detect TIER_2 -> TIER_1 conviction upgrades on the same direction.
+    """
+    if _db is None or not _db.is_configured():
+        return ""
+    cli = _db.client(service=False) or _db.client(service=True)
+    if cli is None:
+        return ""
+    try:
+        resp = (
+            cli.table("snapshots")
+            .select("raw_payload")
+            .eq("symbol", symbol)
+            .order("ts", desc=True)
+            .limit(2)
+            .execute()
+        )
+        rows = resp.data or []
+        if len(rows) >= 2:
+            raw = rows[1].get("raw_payload") or {}
+            sig = raw.get("signal", {}) if isinstance(raw, dict) else {}
+            return sig.get("push_tier", "")
+    except Exception:
+        pass
+    return ""
+
+
 def _maybe_notify(symbol: str, sig_block: dict, current_spot: float = None):
     """Decide whether to push a notification.
 
@@ -218,7 +246,13 @@ def _maybe_notify(symbol: str, sig_block: dict, current_spot: float = None):
     if direction == "NEUTRAL":
         return  # nothing to push for NEUTRAL with no prior trade
     if prev == direction:
-        return  # continuation, silent
+        # Same direction — normally silent continuation.
+        # Exception: TIER_2 -> TIER_1 conviction upgrade on same direction.
+        # Engine went from "watching" to "act now" — that's a new signal.
+        if push_tier == "TIER_1" and _previous_tier(symbol) != "TIER_1":
+            print(f"[notify] {symbol} {direction} conviction upgrade TIER_2->TIER_1 — firing", flush=True)
+        else:
+            return  # genuine continuation, silent
 
     # Tier gate: TIER_1 = loud push, TIER_2 = silent watch, TIER_3 = silent
     if push_tier not in ("TIER_1", "TIER_2"):
