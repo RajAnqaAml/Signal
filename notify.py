@@ -199,16 +199,32 @@ def send_watch_alert(symbol: str, signal_row: dict) -> bool:
     spot   = float(signal_row.get("spot_price") or signal_row.get("entry") or 0)
     conf   = float(signal_row.get("confidence", 0) or 0)
     regime = signal_row.get("ai_regime", "")
-    reason = (signal_row.get("ai_reasoning", "") or "")[:200]
+    reason = (signal_row.get("ai_reasoning", "") or "")[:150]
+
+    # ATM strike + targets (same calc as TIER_1)
+    strike      = recommend_strike(symbol, spot)
+    opt_type    = "PE" if direction == "PUT" else "CE"
+    option      = f"{strike} {opt_type}"
+    target_pts  = TARGET_PTS.get(symbol, 30)
+    sl_pts      = SL_PTS.get(symbol, 15)
+    target_spot = spot - target_pts if direction == "PUT" else spot + target_pts
+    sl_spot     = spot + sl_pts     if direction == "PUT" else spot - sl_pts
+    target_inr  = estimate_pnl(symbol, target_pts)
+    sl_inr      = estimate_pnl(symbol, sl_pts)
+    lot         = LOT_SIZE.get(symbol, 75)
 
     icon  = "PUT" if direction == "PUT" else "CALL"
-    title = f"[WATCH] {symbol} {icon} {conf:.0f}% — {regime}"
+    title = f"[WATCH] {symbol} {icon} {conf:.0f}% — BUY {option}"
     body  = "\n".join([
-        f"Spot: {spot:.2f}  |  Conf: {conf:.0f}%  |  Regime: {regime}",
+        f"Spot:   {spot:.2f}",
+        f"Buy:    {option}  ({lot}-share lot)",
+        f"Target: spot {target_spot:.0f}  (+{target_pts} pts)  ~+Rs {target_inr}",
+        f"Stop:   spot {sl_spot:.0f}  (-{sl_pts} pts)  ~-Rs {sl_inr}",
+        f"Conf:   {conf:.0f}%  |  Regime: {regime}",
         "",
         reason if reason else "No AI reasoning.",
         "",
-        "TIER_2 watch — not high conviction. No action needed.",
+        "TIER_2 watch — monitor, not a confirmed TIER_1.",
     ])
     tags = ["eyes"]
     return _post(url, title, body, priority="low", tags=tags)
