@@ -560,7 +560,8 @@ def _parse_ai_response(raw: str, spot: float, symbol: str, atr: float, dte: int,
     m = re.search(r"\{[\s\S]+\}", cleaned)
     if not m:
         return {"signal": "WAIT", "confidence": 0, "regime": "CHOPPY",
-                "reasoning": "Could not parse AI response", "push_tier": "TIER_3"}
+                "reasoning": "Could not parse AI response", "push_tier": "TIER_3",
+                "target_pts": 30, "sl_pts": 15}
 
     try:
         obj = json.loads(m.group())
@@ -571,7 +572,8 @@ def _parse_ai_response(raw: str, spot: float, symbol: str, atr: float, dte: int,
             obj = json.loads(re.search(r"\{[\s\S]+\}", fixed).group())
         except Exception:
             return {"signal": "WAIT", "confidence": 0, "regime": "CHOPPY",
-                    "reasoning": "JSON parse error in AI response", "push_tier": "TIER_3"}
+                    "reasoning": "JSON parse error in AI response", "push_tier": "TIER_3",
+                    "target_pts": 30, "sl_pts": 15}
 
     # Normalize and validate fields
     sig = str(obj.get("signal", "WAIT")).upper()
@@ -632,11 +634,12 @@ def _to_signal_dict(ai: dict, spot_data: dict, symbol: str, now: datetime,
                     technicals: dict) -> dict:
     """Convert AI parsed dict → legacy signal dict (recorder/DB compatible)."""
     spot      = float(spot_data.get("price", 0))
-    direction = ai["signal"]
-    tier      = ai["push_tier"]
-    conf      = ai["confidence"]
-    t1_pts    = ai["target_pts"]
-    sl_pts    = ai["sl_pts"]
+    direction = ai.get("signal", "WAIT")
+    tier      = ai.get("push_tier", "TIER_3")
+    conf      = ai.get("confidence", 0)
+    atr_default = {"NIFTY": 30, "BANKNIFTY": 120, "SENSEX": 150}.get(symbol, 30)
+    t1_pts    = ai.get("target_pts", atr_default)
+    sl_pts    = ai.get("sl_pts", int(t1_pts * 0.55))
 
     if direction == "CALL":
         target1   = round(spot + t1_pts)
