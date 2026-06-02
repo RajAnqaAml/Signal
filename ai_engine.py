@@ -29,7 +29,7 @@ except Exception:
 
 import notify
 
-_MODEL   = "gemini-2.0-flash"
+_MODEL   = "gemini-2.5-flash"
 _client  = None
 
 # In-process news cache (fastest — reused within one --once run)
