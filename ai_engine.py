@@ -559,6 +559,7 @@ def _parse_ai_response(raw: str, spot: float, symbol: str, atr: float, dte: int,
     # Try to extract JSON object
     m = re.search(r"\{[\s\S]+\}", cleaned)
     if not m:
+        print(f"[ai_engine] parse FAIL — raw response: {repr(raw[:300])}", flush=True)
         return {"signal": "WAIT", "confidence": 0, "regime": "CHOPPY",
                 "reasoning": "Could not parse AI response", "push_tier": "TIER_3",
                 "target_pts": 30, "sl_pts": 15}
