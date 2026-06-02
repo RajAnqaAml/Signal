@@ -398,7 +398,28 @@ def take_one(now, force=False):
     # Secondary: local JSONL fallback (no-op on ephemeral filesystems)
     path = write_jsonl(payload, now)
 
+    # ── Engine health check: alert if NIFTY signal is NEUTRAL (AI broken) ─────
     n = payload["data"]["NIFTY"]["signal"]
+    if n.get("signal") == "NEUTRAL" and n.get("confidence", 0) == 0:
+        # Check how many consecutive NEUTRAL rows we have in DB
+        try:
+            if _db and _db.is_configured():
+                cli = _db.client(service=False) or _db.client(service=True)
+                resp = cli.table("snapshots").select("raw_payload").eq("symbol","NIFTY").order("ts",desc=True).limit(3).execute()
+                neutral_streak = sum(
+                    1 for r in (resp.data or [])
+                    if (r.get("raw_payload") or {}).get("signal",{}).get("confidence",1) == 0
+                )
+                if neutral_streak >= 3 and _notify and _notify.is_configured():
+                    _notify.send_info(
+                        "ENGINE BROKEN",
+                        f"AI engine returning NEUTRAL for 3+ consecutive runs. "
+                        f"Check GH Actions logs — likely Gemini model deprecated or API key issue."
+                    )
+                    print("[health] ALERT sent: engine broken (3+ NEUTRAL runs)", flush=True)
+        except Exception:
+            pass
+
     b = payload["data"]["BANKNIFTY"]["signal"]
     sx_part = ""
     if "SENSEX" in payload["data"]:

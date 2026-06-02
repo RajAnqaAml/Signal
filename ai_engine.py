@@ -29,8 +29,16 @@ except Exception:
 
 import notify
 
-_MODEL   = "gemini-1.5-flash-latest"
-_client  = None
+# Model priority list — tries each in order, falls back on 404/deprecation
+_MODELS = [
+    "gemini-2.5-flash-preview-05-20",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash-001",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash-001",
+]
+_MODEL  = _MODELS[0]   # current working model (updated at runtime on 404)
+_client = None
 
 # In-process news cache (fastest — reused within one --once run)
 _news_cache: dict = {}
@@ -495,16 +503,31 @@ def generate_signal(
             news_context   = news_ctx,
         )
 
-        # Step 2 — AI analysis (no search, consistent JSON output)
-        r = client.models.generate_content(
-            model    = _MODEL,
-            contents = prompt,
-            config   = types.GenerateContentConfig(
-                temperature       = 0.1,
-                max_output_tokens = 400,
-            ),
-        )
-        raw = (r.text or "").strip()
+        # Step 2 — AI analysis with automatic model fallback on 404/deprecation
+        global _MODEL
+        raw = None
+        for _candidate in _MODELS:
+            try:
+                r = client.models.generate_content(
+                    model    = _candidate,
+                    contents = prompt,
+                    config   = types.GenerateContentConfig(
+                        temperature       = 0.1,
+                        max_output_tokens = 400,
+                    ),
+                )
+                if _candidate != _MODEL:
+                    print(f"[ai_engine] Model upgraded: {_MODEL} -> {_candidate}", flush=True)
+                    _MODEL = _candidate
+                raw = (r.text or "").strip()
+                break
+            except Exception as _me:
+                if "404" in str(_me) or "NOT_FOUND" in str(_me) or "no longer available" in str(_me).lower():
+                    print(f"[ai_engine] Model {_candidate} unavailable, trying next...", flush=True)
+                    continue
+                raise  # non-404 error — re-raise immediately
+        if raw is None:
+            raise RuntimeError(f"All Gemini models unavailable: {_MODELS}")
 
         oc_available = oc_analysis is not None
         ai_signal = _parse_ai_response(raw, spot, symbol, atr, dte, oc_available=oc_available)
