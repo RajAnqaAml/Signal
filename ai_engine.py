@@ -513,7 +513,8 @@ def generate_signal(
                     contents = prompt,
                     config   = types.GenerateContentConfig(
                         temperature       = 0.1,
-                        max_output_tokens = 400,
+                        max_output_tokens = 1024,
+                        thinking_config   = types.ThinkingConfig(thinking_budget=0),
                     ),
                 )
                 if _candidate != _MODEL:
@@ -559,7 +560,7 @@ def _parse_ai_response(raw: str, spot: float, symbol: str, atr: float, dte: int,
     # Try to extract JSON object
     m = re.search(r"\{[\s\S]+\}", cleaned)
     if not m:
-        print(f"[ai_engine] parse FAIL — raw response: {repr(raw[:300])}", flush=True)
+        print(f"[ai_engine] parse FAIL — raw: {repr(raw[:200])}", flush=True)
         return {"signal": "WAIT", "confidence": 0, "regime": "CHOPPY",
                 "reasoning": "Could not parse AI response", "push_tier": "TIER_3",
                 "target_pts": 30, "sl_pts": 15}
