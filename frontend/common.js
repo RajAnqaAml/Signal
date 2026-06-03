@@ -89,9 +89,20 @@
 
     // ─── Engine logic (ports from notify.py) ──────────────────────────
     function tierOf(row) {
-        const score = Math.abs(Number(row.score) || 0);
         const conf = Number(row.confidence) || 0;
+        const sig  = row.signal || "NEUTRAL";
+        if (sig === "NEUTRAL" || sig === "WAIT") return "RED";
+
+        // AI engine signals: oi_score is 0 — use confidence threshold
         const oi = Math.abs(Number(row.oi_score) || 0);
+        if (oi === 0) {
+            if (conf >= 80) return "GREEN";
+            if (conf >= 60) return "YELLOW";
+            return "RED";
+        }
+
+        // Legacy rule-based signals: original score logic
+        const score = Math.abs(Number(row.score) || 0);
         const reasons = row.reasons || [];
         const contrarian = reasons.some(r => r && (r.includes("Contrarian") || r.includes("Sharp")));
         if (score >= 4 && conf >= 48 && oi >= 2 && !contrarian) return "GREEN";
