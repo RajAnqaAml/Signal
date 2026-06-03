@@ -29,10 +29,11 @@ except Exception:
 
 import notify
 
-# Model priority list — tries each in order, falls back on 404/deprecation
+# Model priority list — tries each in order, falls back on 404/deprecation.
+# gemini-2.5-flash confirmed working 2026-06-02; keep older models as fallback.
 _MODELS = [
-    "gemini-2.5-flash-preview-05-20",
     "gemini-2.5-flash",
+    "gemini-2.5-flash-preview-05-20",
     "gemini-2.0-flash-001",
     "gemini-1.5-flash-latest",
     "gemini-1.5-flash-001",
@@ -245,6 +246,32 @@ def _format_streak(streak: dict | None) -> str:
     )
 
 
+def _format_performance(perf: dict | None) -> str:
+    """Format the engine's own recent T1/SL track record for the prompt.
+    This is the self-awareness feedback loop — lets the engine recognise when
+    it's being chopped up and stand aside instead of re-entering blindly.
+    """
+    if not perf or (not perf.get("outcomes") and perf.get("whipsaw", 0) < 3):
+        return "No recent entries resolved yet — no performance signal."
+
+    outcomes  = perf.get("outcomes", [])
+    sl_streak = perf.get("sl_streak", 0)
+    win_rate  = perf.get("win_rate")
+    n_recent  = perf.get("n_recent", 0)
+    whipsaw   = perf.get("whipsaw", 0)
+    verdict   = perf.get("verdict", "")
+
+    chain = " -> ".join(outcomes) if outcomes else "none resolved"
+    wr_str = f"{win_rate}% ({n_recent} entries)" if win_rate is not None else "n/a"
+    return (
+        f"Your last entries (newest first): {chain}\n"
+        f"Recent win-rate: {wr_str}\n"
+        f"Consecutive stop-losses right now: {sl_streak}\n"
+        f"Direction flips in last ~40 min: {whipsaw}\n"
+        f"Self-assessment: {verdict}"
+    )
+
+
 def _get_news_context(symbol: str, now: datetime) -> str:
     """Fetch today's news context via Gemini Search.
 
@@ -327,6 +354,9 @@ Day High: {day_high} | Day Low: {day_low}
 === SIGNAL STREAK (Engine Memory) ===
 {streak}
 
+=== YOUR RECENT TRACK RECORD (Self-Awareness) ===
+{performance}
+
 === MARKET CONTEXT ===
 India VIX: {vix} ({vix_trend}) — {vix_desc}
 US market (prev close): {us_market}
@@ -351,6 +381,12 @@ Think through these silently before deciding:
    - Streak < 10 AND price oscillating = CHOPPY.
    - CPR sets the opening bias only. Sustained price action is the final arbiter.
    - NEVER call CHOPPY when price has been making consistent lower lows (or higher highs) for 30+ min.
+9. SELF-AWARENESS (most important when losing): Read YOUR RECENT TRACK RECORD above. You are a disciplined trader managing real capital, not a signal generator. Recent win-rate is the key number.
+   - Recent win-rate <= 40% (4+ entries): you are being CHOPPED. Your reads keep getting stopped out. A tick in your direction is NOT a new setup — it is the same saw. Output WAIT unless a genuinely NEW STRUCTURAL trigger has appeared (a fresh break of the day's range high/low, a CPR level decisively broken with momentum, a volume surge). Re-entering the same failed idea is how accounts bleed out. Cut confidence to reflect hostile conditions.
+   - 2+ consecutive stop-losses: same caution — only re-enter on a clear fresh trigger, never a re-test of the idea that just failed.
+   - Whipsaw flips high (5+): range-bound saw, options bleed premium both ways. Strongly prefer WAIT.
+   - Recent win-rate >= 70%: the trend is real and tradeable — trust clean signals, do not get scared out of a working trend.
+   This is judgment, not a rigid rule: if conditions have genuinely and clearly changed for the better, you MAY re-engage — but the bar is much higher after a run of losses.
 
 === OUTPUT ===
 Output ONLY valid JSON. No markdown fences, no explanation outside JSON:
@@ -386,6 +422,7 @@ def generate_signal(
     now_ist: datetime = None,
     cpr_data: dict | None = None,
     streak_data: dict | None = None,
+    perf_data: dict | None = None,
 ) -> dict:
     """AI-powered signal generator. Drop-in replacement for rule-based generate_signal().
 
@@ -466,6 +503,9 @@ def generate_signal(
         # Signal streak (engine memory — consecutive same-direction snapshots)
         streak_str = _format_streak(streak_data)
 
+        # Recent performance (engine self-awareness — own T1/SL track record)
+        perf_str   = _format_performance(perf_data)
+
         # Market context
         from market_context import _get_us_market, _get_gift_nifty
         us_market = _get_us_market()
@@ -495,6 +535,7 @@ def generate_signal(
             option_chain   = oc_str,
             cpr            = cpr_str,
             streak         = streak_str,
+            performance    = perf_str,
             vix            = vix_val,
             vix_trend      = vix_trend,
             vix_desc       = vix_desc,

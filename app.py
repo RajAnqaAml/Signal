@@ -1570,6 +1570,141 @@ def compute_signal_streak(symbol: str) -> dict:
     return {"signal": current, "count": count, "minutes": count * 2}
 
 
+def compute_recent_performance(symbol: str, lookback: int = 20) -> dict:
+    """Give the engine memory of its OWN recent results — did my last signals
+    win (T1) or lose (SL)? This is the feedback loop the engine was missing.
+
+    Walks back through recent snapshots, finds each TIER_1 entry moment
+    (transition into a direction), and resolves it forward to T1/SL using the
+    spot prices recorded afterward. Returns a summary the LLM can reason about.
+
+    Returns dict:
+        outcomes   : list of recent results, newest first, e.g. ["SL","SL","T1"]
+        sl_streak  : consecutive SLs from the most recent entry backward
+        whipsaw    : count of direction flips (CALL<->PUT) in the lookback window
+        verdict    : short human-readable summary for the prompt
+    """
+    import db as _db
+    cli = _db.client(service=False) or _db.client(service=True)
+    if cli is None:
+        return {"outcomes": [], "sl_streak": 0, "whipsaw": 0, "verdict": "No history."}
+    try:
+        resp = (
+            cli.table("snapshots")
+            .select("ts,raw_payload,spot_price")
+            .eq("symbol", symbol)
+            .order("ts", desc=True)
+            .limit(lookback + 30)   # extra rows to resolve forward outcomes
+            .execute()
+        )
+        rows = list(reversed(resp.data or []))   # chronological (oldest first)
+    except Exception:
+        return {"outcomes": [], "sl_streak": 0, "whipsaw": 0, "verdict": "No history."}
+
+    if len(rows) < 4:
+        return {"outcomes": [], "sl_streak": 0, "whipsaw": 0, "verdict": "Session just started."}
+
+    # Flatten into a clean series
+    series = []
+    for r in rows:
+        raw = r.get("raw_payload") or {}
+        sig = raw.get("signal", {}) if isinstance(raw, dict) else {}
+        series.append({
+            "signal":  sig.get("signal", "?"),
+            "tier":    sig.get("push_tier", "?"),
+            "spot":    float(r.get("spot_price") or 0),
+            "target1": sig.get("target1", 0) or 0,
+            "sl":      sig.get("stop_loss", 0) or 0,
+        })
+
+    import notify as _notify
+
+    def _resolve(i):
+        """Resolve the entry at index i forward → 'T1'/'SL'/'OPEN'."""
+        s = series[i]
+        d = s["signal"]
+        entry = s["spot"]
+        if entry <= 0 or d not in ("CALL", "PUT"):
+            return None
+        t_pts = abs(s["target1"] - entry) if s["target1"] else _notify.TARGET_PTS.get(symbol, 30)
+        spts  = abs(s["sl"] - entry)      if s["sl"]      else _notify.SL_PTS.get(symbol, 18)
+        t1 = entry - t_pts if d == "PUT" else entry + t_pts
+        sl = entry + spts  if d == "PUT" else entry - spts
+        for j in range(i + 1, min(i + 1 + 30, len(series))):
+            sp = series[j]["spot"]
+            if sp <= 0:
+                continue
+            if d == "PUT":
+                if sp <= t1: return "T1"
+                if sp >= sl: return "SL"
+            else:
+                if sp >= t1: return "T1"
+                if sp <= sl: return "SL"
+        return "OPEN"
+
+    # Identify entry moments and resolve them. An entry = a moment a notification
+    # would fire: TIER_1 + direction differs from the immediately previous snapshot
+    # (so CALL -> WAIT -> CALL counts as TWO entries, matching real re-entries).
+    outcomes = []   # chronological
+    prev_sig = None
+    for i, s in enumerate(series):
+        is_entry = (s["tier"] == "TIER_1" and s["signal"] in ("CALL", "PUT")
+                    and s["signal"] != prev_sig)
+        if is_entry:
+            r = _resolve(i)
+            if r in ("T1", "SL"):
+                outcomes.append(r)
+        prev_sig = s["signal"]   # update on EVERY snapshot incl. WAIT/NEUTRAL
+
+    # SL streak (consecutive SLs from the most recent resolved entry backward)
+    sl_streak = 0
+    for o in reversed(outcomes):
+        if o == "SL":
+            sl_streak += 1
+        else:
+            break
+
+    # Win rate over recent entries — the real "am I being chopped?" signal.
+    # In chop, losses interleave with wins (SL,T1,SL,SL), so a low win-rate over
+    # the last ~6 entries detects it far better than a pure consecutive streak.
+    recent  = outcomes[-6:]
+    n_recent = len(recent)
+    wins    = sum(1 for o in recent if o == "T1")
+    win_rate = round(100 * wins / n_recent) if n_recent else None
+
+    # Whipsaw: direction flips among the last `lookback` directional signals
+    recent_dirs = [s["signal"] for s in series[-lookback:] if s["signal"] in ("CALL", "PUT")]
+    whipsaw = sum(1 for a, b in zip(recent_dirs, recent_dirs[1:]) if a != b)
+
+    # Verdict — prioritise win-rate (chop detector), then streak, then whipsaw
+    newest = outcomes[-5:][::-1]   # newest first, max 5
+    if n_recent >= 4 and win_rate is not None and win_rate <= 40:
+        verdict = (f"DANGER: only {wins}/{n_recent} recent entries hit target "
+                   f"({win_rate}% win-rate). The market is chopping your signals. "
+                   f"A tick in your direction is NOT a fresh setup — demand a structural "
+                   f"break (new range high/low, CPR level decisively broken) or WAIT.")
+    elif sl_streak >= 2:
+        verdict = (f"CAUTION: {sl_streak} stop-losses in a row. Be selective — only "
+                   f"enter on a clear NEW trigger, not a re-test of the same idea.")
+    elif whipsaw >= 5:
+        verdict = (f"CHOPPY: {whipsaw} direction flips recently. Range-bound saw — "
+                   f"options bleed premium on both sides. Strongly prefer WAIT.")
+    elif n_recent >= 3 and win_rate is not None and win_rate >= 70:
+        verdict = (f"GOOD: {wins}/{n_recent} recent entries hit target "
+                   f"({win_rate}% win-rate). Trend is tradeable — trust clean signals.")
+    else:
+        verdict = "Mixed/normal — no strong recent pattern."
+
+    return {
+        "outcomes":  newest,
+        "sl_streak": sl_streak,
+        "win_rate":  win_rate,
+        "n_recent":  n_recent,
+        "whipsaw":   whipsaw,
+        "verdict":   verdict,
+    }
+
+
 # ─── AI Engine payload builder ─────────────────────────────────────────────────
 
 def _sanitize(obj):
@@ -1635,6 +1770,18 @@ def build_ai_signals_payload(now_ist=None, verbose=True):
             cpr_cache[_sym] = None
             print(f"[AI Signals] {_sym} CPR failed: {_e}", flush=True)
 
+    # Recent performance — engine's memory of its own T1/SL track record today
+    perf_cache = {}
+    for _sym in ["NIFTY", "BANKNIFTY", "SENSEX"]:
+        try:
+            perf_cache[_sym] = compute_recent_performance(_sym)
+            p = perf_cache[_sym]
+            if (p["sl_streak"] >= 2 or p["whipsaw"] >= 5) and verbose:
+                print(f"[AI Signals] {_sym} perf: SL-streak={p['sl_streak']} "
+                      f"whipsaw={p['whipsaw']} | {p['verdict']}")
+        except Exception as _e:
+            perf_cache[_sym] = None
+
     # ── NIFTY and BANKNIFTY (NSE) ──────────────────────────────────────────
     for symbol in ["NIFTY", "BANKNIFTY"]:
         try:
@@ -1672,7 +1819,8 @@ def build_ai_signals_payload(now_ist=None, verbose=True):
             signal = _ai.generate_signal(
                 symbol, spot_data, oc_analysis, technicals, vix_data,
                 now_ist=now_ist, cpr_data=cpr_cache.get(symbol),
-                streak_data=streak_cache.get(symbol)
+                streak_data=streak_cache.get(symbol),
+                perf_data=perf_cache.get(symbol)
             )
 
             if verbose:
@@ -1722,7 +1870,8 @@ def build_ai_signals_payload(now_ist=None, verbose=True):
                 signal = _ai.generate_signal(
                     symbol, spot_data, oc_analysis, technicals, vix_data,
                     now_ist=now_ist, cpr_data=cpr_cache.get(symbol),
-                    streak_data=streak_cache.get(symbol)
+                    streak_data=streak_cache.get(symbol),
+                    perf_data=perf_cache.get(symbol)
                 )
 
                 if verbose:
