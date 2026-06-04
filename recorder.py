@@ -274,6 +274,7 @@ def _maybe_notify(symbol: str, sig_block: dict, current_spot: float = None):
         return
 
     # ── ENTRY/FLIP push: only if signal is non-NEUTRAL ─────────────
+    is_conviction_upgrade = False
     if direction == "NEUTRAL":
         return  # nothing to push for NEUTRAL with no prior trade
     if prev == direction:
@@ -281,6 +282,7 @@ def _maybe_notify(symbol: str, sig_block: dict, current_spot: float = None):
         # Exception: TIER_2 -> TIER_1 conviction upgrade on same direction.
         # Engine went from "watching" to "act now" — that's a new signal.
         if push_tier == "TIER_1" and _previous_tier(symbol) != "TIER_1":
+            is_conviction_upgrade = True
             print(f"[notify] {symbol} {direction} conviction upgrade TIER_2->TIER_1 — firing", flush=True)
         else:
             return  # genuine continuation, silent
@@ -330,7 +332,12 @@ def _maybe_notify(symbol: str, sig_block: dict, current_spot: float = None):
 
     # Cooldown check: same-direction push fired within cooldown window?
     # Direction flips bypass cooldown (CALL->PUT is always urgent).
-    if prev != ("PUT" if direction == "CALL" else "CALL"):
+    # A TIER_2 -> TIER_1 conviction upgrade ALSO bypasses cooldown — it is a
+    # genuine new "act now" escalation, not a repeated same-conviction push.
+    # (Without this, a choppy TIER_2 phase that flips into the direction within
+    #  15 min would suppress the real TIER_1 — exactly what killed the
+    #  2026-06-04 NIFTY CALL 88% at 10:36.)
+    if not is_conviction_upgrade and prev != ("PUT" if direction == "CALL" else "CALL"):
         age = _last_push_age_min(symbol, direction)
         if age is not None and age <= NOTIFY_COOLDOWN_MIN:
             print(
