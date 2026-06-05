@@ -330,22 +330,16 @@ def _maybe_notify(symbol: str, sig_block: dict, current_spot: float = None):
         )
         return
 
-    # Cooldown check: same-direction push fired within cooldown window?
-    # Direction flips bypass cooldown (CALL->PUT is always urgent).
-    # A TIER_2 -> TIER_1 conviction upgrade ALSO bypasses cooldown — it is a
-    # genuine new "act now" escalation, not a repeated same-conviction push.
-    # (Without this, a choppy TIER_2 phase that flips into the direction within
-    #  15 min would suppress the real TIER_1 — exactly what killed the
-    #  2026-06-04 NIFTY CALL 88% at 10:36.)
-    if not is_conviction_upgrade and prev != ("PUT" if direction == "CALL" else "CALL"):
-        age = _last_push_age_min(symbol, direction)
-        if age is not None and age <= NOTIFY_COOLDOWN_MIN:
-            print(
-                f"[notify] {symbol} {direction} suppressed: prior push fired "
-                f"{age:.1f} min ago (cooldown {NOTIFY_COOLDOWN_MIN} min)",
-                flush=True,
-            )
-            return
+    # NO COOLDOWN FOR TIER_1 (GREEN). A TIER_1/GREEN signal is the highest-value
+    # alert we produce — it must NEVER be silently suppressed. The continuation
+    # gate above already silences sustained same-direction TIER_1, so the only
+    # signals reaching here are genuine direction-transitions or conviction
+    # upgrades. Both deserve the phone.
+    #
+    # History: the 15-min cooldown repeatedly killed real GREEN signals when a
+    # choppy TIER_2 phase flickered into the direction within the window —
+    # 2026-06-04 NIFTY CALL 88% @10:36 and 2026-06-05 NIFTY CALL 88% @09:44
+    # both suppressed this way. Per user: no cooldown for actual GREEN signals.
 
     # ── AI Filter (Gemini with Google Search grounding) ────────────────
     # Uses ai_result attached to sig_block by take_one() before calling here.
