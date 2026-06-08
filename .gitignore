@@ -30,3 +30,5 @@ frontend/config.js
 .DS_Store
 Thumbs.db
 news_cache.json
+node_modules
+frontend/node_modules

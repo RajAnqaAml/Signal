@@ -20,6 +20,15 @@
 [build.environment]
   NODE_VERSION = "18"
 
+# Serverless functions live under frontend/netlify/functions (base = "frontend").
+# The chat assistant function needs these env vars set in Netlify Site Settings:
+#   GOOGLE_API_KEY  (Gemini)   — required
+#   CHAT_TOKEN      (optional)  — if set, the chat page must send a matching PIN
+# It reuses PUBLIC_SUPABASE_URL / PUBLIC_SUPABASE_ANON_KEY (already set for build).
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
 # Cache HTML for short window so updates propagate fast
 [[headers]]
   for = "/index.html"
