@@ -588,6 +588,12 @@ def analyze_option_chain(oc_data, spot, symbol="NIFTY", now_ist=None):
             "pe_chg": pe.get("changeinOpenInterest", 0) or 0,
             "ce_iv": ce.get("impliedVolatility", 0) or 0,
             "pe_iv": pe.get("impliedVolatility", 0) or 0,
+            # Live option premium (LTP) + intraday change — needed for Rs-priced
+            # Entry/T1/T2/SL tickets.
+            "ce_ltp": ce.get("lastPrice", 0) or 0,
+            "pe_ltp": pe.get("lastPrice", 0) or 0,
+            "ce_ltp_chg": ce.get("change", 0) or 0,
+            "pe_ltp_chg": pe.get("change", 0) or 0,
         }
 
     if not strikes:
@@ -620,6 +626,19 @@ def analyze_option_chain(oc_data, spot, symbol="NIFTY", now_ist=None):
     atm_band = [atm_strike + i * step for i in range(-3, 4)]
     atm_ce_chg = sum(strikes.get(k, {}).get("ce_chg", 0) for k in atm_band)
     atm_pe_chg = sum(strikes.get(k, {}).get("pe_chg", 0) for k in atm_band)
+
+    # Live premiums for ATM ±2 strikes — the raw material for Rs-priced tickets.
+    premiums = {}
+    for k in (atm_strike + i * step for i in range(-2, 3)):
+        s = strikes.get(k)
+        if not s:
+            continue
+        premiums[int(k)] = {
+            "ce_ltp": round(float(s["ce_ltp"]), 2),
+            "pe_ltp": round(float(s["pe_ltp"]), 2),
+            "ce_chg": round(float(s["ce_ltp_chg"]), 2),
+            "pe_chg": round(float(s["pe_ltp_chg"]), 2),
+        }
 
     # IV skew over ATM ±5, ignoring zero-IV (illiquid) strikes.
     iv_band = [atm_strike + i * step for i in range(-5, 6)]
@@ -658,6 +677,9 @@ def analyze_option_chain(oc_data, spot, symbol="NIFTY", now_ist=None):
         "iv_skew": iv_skew,
         "total_ce_oi": int(total_ce_oi),
         "total_pe_oi": int(total_pe_oi),
+        # Live option premiums (LTP) for ATM ±2 strikes — for Rs-priced tickets.
+        "atm_strike": int(atm_strike),
+        "premiums": premiums,
     }
 
 
