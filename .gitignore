@@ -32,3 +32,7 @@ Thumbs.db
 news_cache.json
 node_modules
 frontend/node_modules
+
+frontend/_localdev.mjs
+frontend/config.js
+frontend/package-lock.json

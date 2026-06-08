@@ -20,7 +20,16 @@
  */
 
 import { GoogleGenAI } from "@google/genai";
-import { createClient } from "@supabase/supabase-js";
+
+// Minimal Supabase REST (PostgREST) reader — avoids the supabase-js SDK and its
+// realtime/WebSocket dependency (which breaks on Node < 22). We only do SELECTs.
+async function sbSelect(baseUrl, key, table, query) {
+  const r = await fetch(`${baseUrl}/rest/v1/${table}?${query}`, {
+    headers: { apikey: key, Authorization: `Bearer ${key}` },
+  });
+  if (!r.ok) throw new Error(`supabase ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return r.json();
+}
 
 // ── Engine constants (mirror notify.py — the P&L source of truth) ──────────
 const SYMBOL_CFG = {
@@ -173,25 +182,25 @@ export default async (req) => {
   if (!messages.length) return Response.json({ error: "no messages" }, { status: 400 });
 
   // ── fetch today's snapshots ────────────────────────────────────────────
-  const sb = createClient(sbUrl, sbKey);
   const dateStr = istDateStr();
   const startIso = new Date(`${dateStr}T00:00:00+05:30`).toISOString();
 
   const latest = {}, todaySummary = {}, plans = {};
   try {
     for (const sym of SYMBOLS) {
-      const { data } = await sb
-        .from("snapshots")
-        .select("ts,symbol,spot_price,raw_payload")
-        .eq("symbol", sym)
-        .gte("ts", startIso)
-        .order("ts", { ascending: true });
-      const rows = data || [];
+      const q = `select=ts,symbol,spot_price,raw_payload`
+        + `&symbol=eq.${sym}`
+        + `&ts=gte.${encodeURIComponent(startIso)}`
+        + `&order=ts.asc`;
+      const rows = await sbSelect(sbUrl, sbKey, "snapshots", q);
       if (!rows.length) continue;
       const sigs = rows.map(sigOf);
-      latest[sym] = sigs[sigs.length - 1];
+      // Ignore broken snapshots (spot_price 0 / missing) when picking open & latest.
+      const valid = sigs.filter(s => s.spot > 0);
+      if (!valid.length) continue;
+      latest[sym] = valid[valid.length - 1];
       todaySummary[sym] = {
-        open: sigs[0].spot,
+        open: valid[0].spot,
         tier1: sigs.filter(s => s.tier === "TIER_1" && (s.signal === "CALL" || s.signal === "PUT")).length,
       };
       const p = tradePlan(sym, latest[sym]);
