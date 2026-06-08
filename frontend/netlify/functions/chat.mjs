@@ -85,6 +85,69 @@ function sigOf(row) {
   };
 }
 
+// Chart-based S/R from previous daily candles: CPR, floor pivots, multi-day range.
+async function fetchChartLevels(baseUrl, key, symbol) {
+  const since = new Date(Date.now() - 16 * 24 * 3600 * 1000).toISOString();
+  // NEWEST-first + limit: PostgREST caps at 1000 rows, so ts.asc would return the
+  // OLDEST 1000 and miss recent days (the pivot bug). Fetch desc, then reverse.
+  const q = `select=ts,open,high,low,close`
+    + `&symbol=eq.${symbol}&interval_minutes=eq.5`
+    + `&ts=gte.${encodeURIComponent(since)}&order=ts.desc&limit=1000`;
+  let rows;
+  try { rows = await sbSelect(baseUrl, key, "historical_candles", q); }
+  catch { return null; }
+  if (!rows || !rows.length) return null;
+  rows.reverse(); // back to chronological so daily close = last candle of day
+
+  // aggregate 5-min candles -> daily OHLC (ts is already IST iso)
+  const days = {};
+  for (const r of rows) {
+    const d = String(r.ts).slice(0, 10);
+    if (r.high == null || r.low == null || r.close == null) continue;
+    if (!days[d]) days[d] = { o: +r.open, h: +r.high, l: +r.low, c: +r.close };
+    else { days[d].h = Math.max(days[d].h, +r.high); days[d].l = Math.min(days[d].l, +r.low); days[d].c = +r.close; }
+  }
+  const today = istDateStr();
+  const dates = Object.keys(days).filter(d => d < today).sort(); // completed days only
+  if (!dates.length) return null;
+
+  const prev = dates[dates.length - 1];
+  const { h: H, l: L, c: C } = days[prev];
+  const PP = (H + L + C) / 3;
+  const bc = (H + L) / 2;
+  const cpr = { pivot: PP, bc, tc: 2 * PP - bc };
+  const piv = {
+    PP, R1: 2 * PP - L, S1: 2 * PP - H,
+    R2: PP + (H - L), S2: PP - (H - L),
+    R3: H + 2 * (PP - L), S3: L - 2 * (H - PP),
+  };
+  const rng = (n) => {
+    const ds = dates.slice(-n);
+    return { hi: Math.max(...ds.map(d => days[d].h)), lo: Math.min(...ds.map(d => days[d].l)) };
+  };
+  return { prevDate: prev, prevH: H, prevL: L, prevC: C, cpr, piv, r5: rng(5), r10: rng(10), nDays: dates.length };
+}
+
+function formatChartLevels(symbol, cl) {
+  const R = Math.round;
+  const L = [];
+  L.push(`=== ${symbol} CHART LEVELS (from previous daily candles; prev day ${cl.prevDate} H/L/C ${R(cl.prevH)}/${R(cl.prevL)}/${R(cl.prevC)}) ===`);
+  L.push(`  CPR: pivot ${R(cl.cpr.pivot)} | TC ${R(cl.cpr.tc)} | BC ${R(cl.cpr.bc)}`);
+  L.push(`  Floor pivots — Resistance: R1 ${R(cl.piv.R1)}, R2 ${R(cl.piv.R2)}, R3 ${R(cl.piv.R3)}`);
+  L.push(`                 Support:    S1 ${R(cl.piv.S1)}, S2 ${R(cl.piv.S2)}, S3 ${R(cl.piv.S3)}  (PP ${R(cl.piv.PP)})`);
+  L.push(`  Multi-day range: 5-day ${R(cl.r5.lo)}–${R(cl.r5.hi)} | 10-day ${R(cl.r10.lo)}–${R(cl.r10.hi)}`);
+  return L.join("\n");
+}
+
+function detectSymbols(t) {
+  t = (t || "").toLowerCase();
+  const out = new Set();
+  if (/sensex/.test(t)) out.add("SENSEX");
+  if (/bank\s*nifty|banknifty|\bbank\b/.test(t)) out.add("BANKNIFTY");
+  if (/\bnifty\b/.test(t) && !/bank\s*nifty|banknifty/.test(t)) out.add("NIFTY");
+  return out.size ? [...out] : SYMBOLS;
+}
+
 // Organise raw levels into support (below spot) / resistance (above spot).
 function keyLevels(s) {
   const spot = s.spot;
@@ -154,7 +217,9 @@ WHAT THE TIERS MEAN:
 ALWAYS state the confidence % when discussing any symbol's signal.
 
 HOW TO ANSWER:
-- "support / resistance / levels?" -> ALWAYS answer using the Resistance/Support lines in the context. List the key resistance levels (above spot) and support levels (below spot) with what each is (call-wall, max-pain, day-high, etc.). These exist regardless of whether there's a trade signal — NEVER refuse to give levels.
+- "support / resistance / levels?" -> ALWAYS give levels; NEVER refuse. Two sources, use whichever fits the question (or both):
+    * INTRADAY (today): the Resistance/Support lines — call-wall, put-wall, max-pain, day-high/low.
+    * CHART-BASED (from previous daily candles), shown in a "CHART LEVELS" block when present: CPR (pivot/TC/BC), floor pivots (R1-R3 / S1-S3 / PP), and 5-day & 10-day range. If the user says "previous charts", "pivot", "CPR", or "based on charts", LEAD with these chart levels. Label each level so the user knows its source.
 - "trend?" -> state direction (CALL=bullish, PUT=bearish, WAIT=no clean trade), regime, confidence %, and a one-line read.
 - "entry / exit / SL?" ->
     * If there's a TRADE PLAN in context: give it — option (strike+CE/PE), entry zone, don't-chase line, target (spot + approx Rs), stop (spot + approx Rs), and confidence %.
@@ -254,7 +319,20 @@ export default async (req) => {
     return Response.json({ error: "supabase read failed: " + e.message }, { status: 500 });
   }
 
-  const context = buildContext(latest, plans, todaySummary);
+  let context = buildContext(latest, plans, todaySummary);
+
+  // ── Chart-based S/R (CPR + pivots + multi-day range) — only when asked ─────
+  const lastUserMsg = [...messages].reverse().find(m => m.role !== "assistant")?.content || "";
+  const wantsLevels = /support|resist|\blevel|pivot|\bcpr\b|chart|\bs\/r\b/i.test(lastUserMsg);
+  if (wantsLevels) {
+    const syms = detectSymbols(lastUserMsg);
+    const chunks = [];
+    for (const sym of syms) {
+      const cl = await fetchChartLevels(sbUrl, sbKey, sym);
+      if (cl) chunks.push(formatChartLevels(sym, cl));
+    }
+    if (chunks.length) context += "\n\n" + chunks.join("\n\n");
+  }
 
   // ── Gemini ───────────────────────────────────────────────────────────────
   const ai = new GoogleGenAI({ apiKey });
