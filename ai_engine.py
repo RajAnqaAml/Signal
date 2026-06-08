@@ -575,6 +575,12 @@ def generate_signal(
         ai_signal = _parse_ai_response(raw, spot, symbol, atr, dte, oc_available=oc_available)
         result    = _to_signal_dict(ai_signal, spot_data, symbol, now, technicals)
 
+        # Rs-priced ticket (Entry/T1/T2/SL in premium) from live ATM premiums
+        result["premium_ticket"] = _premium_ticket(
+            symbol, result["signal"], spot,
+            result["target1"], result["target2"], result["stop_loss"], oc_analysis,
+        )
+
         print(
             f"[ai_engine] {symbol} -> {result['signal']} "
             f"conf={result['confidence']:.0f}% tier={result['push_tier']} "
@@ -728,6 +734,59 @@ def _to_signal_dict(ai: dict, spot_data: dict, symbol: str, now: datetime,
         "ai_reasoning":   ai.get("reasoning", ""),
         "ai_key_risk":    ai.get("key_risk", ""),
         "ai_hold_min":    ai.get("hold_minutes", 60),
+    }
+
+
+def _premium_ticket(symbol, direction, spot, target1, target2, stop_loss, oc_analysis):
+    """Build an option-premium (Rs) trade ticket: Entry / T1 / T2 / SL + risk/reward.
+
+    Uses the live ATM premium (stored in oc_analysis['premiums']) and a delta
+    derived from the local premium ladder (falls back to 0.5). Premium T1/T2/SL
+    are delta-ESTIMATES — labelled approx — the live screenshot is the exact source.
+    """
+    if direction not in ("CALL", "PUT") or not oc_analysis:
+        return None
+    prem = oc_analysis.get("premiums") or {}
+    atm = oc_analysis.get("atm_strike")
+    if not atm or atm not in prem:
+        return None
+
+    step = notify.STRIKE_STEP.get(symbol, 50)
+    lot  = notify.LOT_SIZE.get(symbol, 75)
+    leg  = "ce_ltp" if direction == "CALL" else "pe_ltp"
+
+    entry = float(prem[atm].get(leg, 0) or 0)
+    if entry <= 0:
+        return None
+
+    # Local delta from the premium ladder around ATM (|dPrem/dSpot|), clamped.
+    delta = 0.5
+    up, dn = prem.get(atm + step), prem.get(atm - step)
+    if up and dn:
+        d = abs(float(up.get(leg, 0)) - float(dn.get(leg, 0))) / (2 * step)
+        if 0.1 <= d <= 0.95:
+            delta = d
+
+    t1_pts = abs(target1 - spot)
+    t2_pts = abs(target2 - spot)
+    sl_pts = abs(spot - stop_loss)
+
+    # A winning move raises the premium; a losing move lowers it (both directions).
+    t1_prem = round(entry + t1_pts * delta, 1)
+    t2_prem = round(entry + t2_pts * delta, 1)
+    sl_prem = round(max(entry - sl_pts * delta, 0.5), 1)
+
+    risk_inr = int(round((entry - sl_prem) * lot))
+    rew1_inr = int(round((t1_prem - entry) * lot))
+    rew2_inr = int(round((t2_prem - entry) * lot))
+    rr = round(rew1_inr / risk_inr, 2) if risk_inr > 0 else 0
+
+    opt_type = "CE" if direction == "CALL" else "PE"
+    return {
+        "strike": int(atm), "option": f"{int(atm)} {opt_type}", "lot": lot,
+        "entry_prem": round(entry, 1), "t1_prem": t1_prem, "t2_prem": t2_prem,
+        "sl_prem": sl_prem, "delta": round(delta, 2),
+        "risk_inr": risk_inr, "reward1_inr": rew1_inr, "reward2_inr": rew2_inr, "rr": rr,
     }
 
 

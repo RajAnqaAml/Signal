@@ -111,14 +111,21 @@ def send_signal_alert(symbol: str, signal_row: dict) -> bool:
     sl_inr = estimate_pnl(symbol, sl_pts)
     lot = LOT_SIZE.get(symbol, 75)
 
-    # Tier
-    has_contrarian = any(("Contrarian" in r or "Sharp" in r) for r in reasons)
-    if abs(score) >= 4 and conf >= 48 and abs(oi) >= 2 and not has_contrarian:
-        tier = "GREEN (high conviction)"
-    elif abs(score) >= 3 and conf >= 30 and not has_contrarian:
-        tier = "YELLOW (paper-trade)"
+    # Tier label. For AI signals use push_tier (the real conviction); the legacy
+    # score-based label reads "RED (skip)" for AI rows because oi_score is 0.
+    push_tier = signal_row.get("push_tier", "")
+    if push_tier in ("TIER_1", "TIER_2", "TIER_3"):
+        tier = {"TIER_1": "GREEN (high conviction)",
+                "TIER_2": "YELLOW (watch)",
+                "TIER_3": "GREY (low)"}[push_tier]
     else:
-        tier = "RED (skip)"
+        has_contrarian = any(("Contrarian" in r or "Sharp" in r) for r in reasons)
+        if abs(score) >= 4 and conf >= 48 and abs(oi) >= 2 and not has_contrarian:
+            tier = "GREEN (high conviction)"
+        elif abs(score) >= 3 and conf >= 30 and not has_contrarian:
+            tier = "YELLOW (paper-trade)"
+        else:
+            tier = "RED (skip)"
 
     # Title — fits on phone lock-screen (~50 chars)
     icon = "[PUT]" if direction == "PUT" else "[CALL]"
@@ -134,20 +141,39 @@ def send_signal_alert(symbol: str, signal_row: dict) -> bool:
     ai_hold_min  = signal_row.get("ai_hold_min", 0)
     is_ai_signal = bool(signal_row.get("evidence_quality") == "ai" or ai_reasoning)
 
-    body = [
-        f"Spot:    {spot:.2f}",
-        f"Buy:     {option}  (ATM weekly, {lot}-share lot)",
-        "",
-        f"Target:  spot {target_spot:.0f}  ({direction == 'PUT' and '-' or '+'}{target_pts} pts)  ≈ +Rs {target_inr}",
-        f"Stop:    spot {sl_spot:.0f}  ({direction == 'PUT' and '+' or '-'}{sl_pts} pts)  ≈ -Rs {sl_inr}",
-        f"Hold:    max {ai_hold_min} min (exit if signal flips)" if ai_hold_min else
-        "Exit:    HOLD while engine stays {dir}. Exit when signal flips.".format(dir=direction),
-        "",
-        f"Conf: {conf:.0f}%  Regime: {ai_regime}  Tier: {tier}" if ai_regime else
-        f"Score: {score:+.2f}  Conf: {conf:.0f}%  Tier: {tier}",
-        "",
-        "AI Reasoning:",
-    ]
+    # Rs-priced ticket (premium Entry/T1/T2/SL) when available — the real trade plan
+    tk = signal_row.get("premium_ticket")
+    if tk:
+        body = [
+            f"Spot:    {spot:.2f}",
+            f"BUY {tk['option']}  ({lot}-share lot)",
+            "",
+            f"Entry:   Rs {tk['entry_prem']}",
+            f"Target1: Rs {tk['t1_prem']}   (+Rs {tk['reward1_inr']:,})",
+            f"Target2: Rs {tk['t2_prem']}   (+Rs {tk['reward2_inr']:,})",
+            f"Stop:    Rs {tk['sl_prem']}   (-Rs {tk['risk_inr']:,})",
+            f"R:R:     1:{tk['rr']}    (premium approx, delta {tk['delta']})",
+            f"Hold:    max {ai_hold_min} min" if ai_hold_min else "Exit when signal flips.",
+            "",
+            f"Conf: {conf:.0f}%  Regime: {ai_regime}  Tier: {tier}",
+            "",
+            "AI Reasoning:",
+        ]
+    else:
+        body = [
+            f"Spot:    {spot:.2f}",
+            f"Buy:     {option}  (ATM weekly, {lot}-share lot)",
+            "",
+            f"Target:  spot {target_spot:.0f}  ({direction == 'PUT' and '-' or '+'}{target_pts} pts)  ≈ +Rs {target_inr}",
+            f"Stop:    spot {sl_spot:.0f}  ({direction == 'PUT' and '+' or '-'}{sl_pts} pts)  ≈ -Rs {sl_inr}",
+            f"Hold:    max {ai_hold_min} min (exit if signal flips)" if ai_hold_min else
+            "Exit:    HOLD while engine stays {dir}. Exit when signal flips.".format(dir=direction),
+            "",
+            f"Conf: {conf:.0f}%  Regime: {ai_regime}  Tier: {tier}" if ai_regime else
+            f"Score: {score:+.2f}  Conf: {conf:.0f}%  Tier: {tier}",
+            "",
+            "AI Reasoning:",
+        ]
 
     if is_ai_signal and ai_reasoning:
         # Wrap long reasoning into lines
@@ -214,6 +240,25 @@ def send_watch_alert(symbol: str, signal_row: dict) -> bool:
     lot         = LOT_SIZE.get(symbol, 75)
 
     icon  = "PUT" if direction == "PUT" else "CALL"
+    # Prefer the Rs-priced premium ticket when available
+    tk = signal_row.get("premium_ticket")
+    if tk:
+        title = f"[WATCH] {symbol} {icon} {conf:.0f}% — BUY {tk['option']}"
+        lines = [
+            f"Spot:    {spot:.2f}",
+            f"BUY {tk['option']}  ({tk['lot']}-share lot)",
+            f"Entry:   Rs {tk['entry_prem']}",
+            f"Target1: Rs {tk['t1_prem']}  (+Rs {tk['reward1_inr']:,})",
+            f"Target2: Rs {tk['t2_prem']}  (+Rs {tk['reward2_inr']:,})",
+            f"Stop:    Rs {tk['sl_prem']}  (-Rs {tk['risk_inr']:,})",
+            f"R:R:     1:{tk['rr']}  (premium approx)",
+            f"Conf:    {conf:.0f}%  |  Regime: {regime}",
+            "",
+            reason if reason else "No AI reasoning.",
+        ]
+        body = "\n".join(lines).replace("→", "->").replace("—", "-") + "\n\nTIER_2 watch — monitor, not a confirmed TIER_1."
+        return _post(url, title, body, priority="low", tags=["eyes"])
+
     title = f"[WATCH] {symbol} {icon} {conf:.0f}% — BUY {option}"
     body  = "\n".join([
         f"Spot:   {spot:.2f}",
