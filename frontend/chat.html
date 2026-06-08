@@ -82,16 +82,29 @@
         <button class="chip" data-q="Any TIER_1 / GREEN signals today?">Any GREEN today?</button>
     </div>
 
+    <!-- Image preview (shows the screenshot to be sent) -->
+    <div id="img-preview" class="hidden mb-2 flex items-center gap-2 card p-2">
+        <img id="img-thumb" class="w-12 h-12 rounded-lg object-cover" alt="screenshot">
+        <span class="text-xs text-muted flex-1">Screenshot attached — ask "should I trade?" or just send.</span>
+        <button id="img-remove" class="text-rose-500 text-xs font-semibold px-2">Remove</button>
+    </div>
+
     <!-- Input -->
     <form id="chat-form" class="card flex items-end gap-2 p-2">
-        <textarea id="input" rows="1" placeholder="Ask about trend, entry, exit, SL…"
+        <input type="file" id="file-input" accept="image/*" class="hidden">
+        <button type="button" id="attach"
+            class="shrink-0 w-9 h-9 rounded-xl bg-blush-100 text-blush-600 flex items-center justify-center"
+            title="Upload broker screenshot">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14M4 6h16a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2z"/></svg>
+        </button>
+        <textarea id="input" rows="1" placeholder="Ask, or attach a screenshot…"
             class="flex-1 resize-none bg-transparent px-2 py-1.5 text-sm focus:outline-none max-h-32"></textarea>
         <button type="submit" id="send"
             class="shrink-0 w-9 h-9 rounded-xl bg-blush-500 text-white flex items-center justify-center disabled:opacity-40">
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M13 6l6 6-6 6"/></svg>
         </button>
     </form>
-    <p class="text-[10px] text-muted/70 text-center mt-2">Estimates only · Rs figures approx · Not financial advice</p>
+    <p class="text-[10px] text-muted/70 text-center mt-2">Upload your broker screenshot for a live read · Not financial advice</p>
 
 </div>
 

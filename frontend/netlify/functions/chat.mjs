@@ -21,7 +21,7 @@
 
 // Gemini via raw REST — avoids the @google/genai SDK, which returns 401 on
 // Netlify's runtime even with a valid key (raw REST with the same key works).
-async function callGemini(apiKey, model, contents) {
+async function callGemini(apiKey, model, contents, hasImage) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const r = await fetch(url, {
     method: "POST",
@@ -29,7 +29,8 @@ async function callGemini(apiKey, model, contents) {
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents,
-      generationConfig: { temperature: 0.3, maxOutputTokens: 800, thinkingConfig: { thinkingBudget: 0 } },
+      // give vision answers more room (reading a chart + full setup)
+      generationConfig: { temperature: 0.3, maxOutputTokens: hasImage ? 1200 : 800, thinkingConfig: { thinkingBudget: 0 } },
     }),
   });
   const text = await r.text();
@@ -250,7 +251,21 @@ HOW TO ANSWER:
 - "status today?" -> per symbol: net move, current signal + confidence %, TIER_1 count.
 - History/performance beyond today: not wired up yet (coming soon) — you only have today's data.
 
-NEVER fabricate numbers. Use only the levels and values in the context. But DO always give the support/resistance levels and a conditional plan — that is exactly what the user wants when the engine is on WAIT.`;
+SCREENSHOT ANALYSIS (when the user uploads an image):
+- The image is the user's LIVE broker screen — an option chain and/or chart. It is the most up-to-date source: read it directly.
+- Extract what you can SEE: current spot, the CE/PE strikes and their premiums (LTP) + change, OI, and any chart pattern (higher-highs/lows, breakout, consolidation, waterfall drop in a premium = that side getting crushed).
+- Cross-check with the engine MARKET CONTEXT (signal, regime, confidence, support/resistance). If the screenshot and engine agree, conviction is higher; if they disagree, say so.
+- Use the REAL premiums from the screenshot for the trade setup (entry/target/SL in Rs) — these are exact, not estimates.
+- If the image is unreadable or not a trading screen, say so and ask for a clearer option-chain/chart screenshot.
+
+ALWAYS END WITH A CLEAR VERDICT. Every trade-intent question (and every screenshot) must finish with ONE of:
+  ✅ TAKE THE TRADE — then the setup: option (strike + CE/PE), Entry (Rs), Target 1 & 2 (Rs), Stop (Rs), Risk and Reward in Rs (× lot), R:R ratio.
+  ⛔ NO TRADE — WAIT — then why (chop / low confidence / extended / engine on WAIT), and the exact condition that would change it (e.g. "if NIFTY closes a 5-min candle above 23,240").
+Be decisive but disciplined: prefer ⛔ WAIT unless there is genuine confluence (engine signal + screenshot agree + clean level break). Never scream BUY on a choppy/low-conviction setup — the engine over-fires in chop and capital protection comes first.
+
+DISCIPLINE to include with any ✅ TAKE: 1 lot only, no averaging, hard stop (no exceptions), and exit by 3:00 PM IST regardless.
+
+NEVER fabricate numbers. Use only the engine context values and what is visibly readable in the screenshot.`;
 
 function buildContext(latest, plans, todaySummary) {
   const lines = [];
@@ -309,6 +324,17 @@ export default async (req) => {
   const messages = Array.isArray(body.messages) ? body.messages.slice(-12) : [];
   if (!messages.length) return Response.json({ error: "no messages" }, { status: 400 });
 
+  // optional screenshot: { mime, data(base64, no prefix) } or a data: URL string
+  let image = null;
+  if (body.image) {
+    if (typeof body.image === "string") {
+      const m = body.image.match(/^data:(image\/\w+);base64,(.+)$/s);
+      if (m) image = { mime: m[1], data: m[2] };
+    } else if (body.image.data) {
+      image = { mime: body.image.mime || "image/png", data: body.image.data.replace(/^data:[^,]+,/, "") };
+    }
+  }
+
   // ── fetch today's snapshots ────────────────────────────────────────────
   const dateStr = istDateStr();
   const startIso = new Date(`${dateStr}T00:00:00+05:30`).toISOString();
@@ -358,6 +384,15 @@ export default async (req) => {
     role: m.role === "assistant" ? "model" : "user",
     parts: [{ text: String(m.content || "") }],
   }));
+  // attach the screenshot (if any) to the most recent user turn for vision
+  if (image) {
+    for (let i = contents.length - 1; i >= 0; i--) {
+      if (contents[i].role === "user") {
+        contents[i].parts.push({ inline_data: { mime_type: image.mime, data: image.data } });
+        break;
+      }
+    }
+  }
   // inject context as a leading user turn so the model always sees fresh data
   contents.unshift({ role: "user", parts: [{ text: "MARKET CONTEXT (live, from the engine):\n" + context }] });
   contents.splice(1, 0, { role: "model", parts: [{ text: "Got the latest market context. What would you like to know?" }] });
@@ -365,7 +400,7 @@ export default async (req) => {
   let reply = null, lastErr = null;
   for (const model of MODELS) {
     try {
-      reply = await callGemini(apiKey, model, contents);
+      reply = await callGemini(apiKey, model, contents, !!image);
       if (reply) break;
     } catch (e) {
       lastErr = e;

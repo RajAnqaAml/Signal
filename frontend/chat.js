@@ -8,9 +8,58 @@
     const input = document.getElementById("input");
     const sendBtn = document.getElementById("send");
     const chips = document.getElementById("chips");
+    const fileInput = document.getElementById("file-input");
+    const attachBtn = document.getElementById("attach");
+    const imgPreview = document.getElementById("img-preview");
+    const imgThumb = document.getElementById("img-thumb");
+    const imgRemove = document.getElementById("img-remove");
 
     // Conversation history sent to the function (role: user|assistant)
     const history = [];
+
+    // Pending screenshot to send with the next message (data URL string)
+    let pendingImage = null;
+
+    // ── Image handling: downscale to keep the payload small ──────────────────
+    function loadAndDownscale(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = reject;
+            reader.onload = () => {
+                const img = new Image();
+                img.onerror = reject;
+                img.onload = () => {
+                    const maxW = 1280;
+                    const scale = Math.min(1, maxW / img.width);
+                    const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+                    const canvas = document.createElement("canvas");
+                    canvas.width = w; canvas.height = h;
+                    canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+                    resolve(canvas.toDataURL("image/jpeg", 0.82));
+                };
+                img.src = reader.result;
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+    function clearImage() {
+        pendingImage = null;
+        imgPreview.classList.add("hidden");
+        fileInput.value = "";
+    }
+    attachBtn.addEventListener("click", () => fileInput.click());
+    imgRemove.addEventListener("click", clearImage);
+    fileInput.addEventListener("change", async () => {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        try {
+            pendingImage = await loadAndDownscale(file);
+            imgThumb.src = pendingImage;
+            imgPreview.classList.remove("hidden");
+        } catch {
+            addBubble("bot", "⚠️ Couldn't read that image. Try a PNG/JPG screenshot.");
+        }
+    });
 
     // ── PIN gate (only if the function enforces CHAT_TOKEN) ───────────────
     // Stored locally so you enter it once. Sent as x-chat-token.
@@ -47,13 +96,24 @@
         return blocks.join("");
     }
 
-    function addBubble(role, text) {
+    function addBubble(role, text, imageDataUrl) {
         const wrap = document.createElement("div");
         wrap.className = "flex animate-fade-in " + (role === "user" ? "justify-end" : "justify-start");
         const b = document.createElement("div");
         b.className = (role === "user" ? "bubble-user" : "bubble-bot") + " px-3.5 py-2.5 text-sm leading-relaxed max-w-[85%]";
-        if (role === "user") b.textContent = text;
-        else b.innerHTML = renderMarkdown(text);
+        if (role === "user") {
+            if (imageDataUrl) {
+                const im = document.createElement("img");
+                im.src = imageDataUrl;
+                im.className = "rounded-lg mb-1.5 max-h-44 w-auto";
+                b.appendChild(im);
+            }
+            const t = document.createElement("div");
+            t.textContent = text;
+            b.appendChild(t);
+        } else {
+            b.innerHTML = renderMarkdown(text);
+        }
         wrap.appendChild(b);
         messagesEl.appendChild(wrap);
         messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -77,24 +137,28 @@
     let busy = false;
     async function send(text) {
         text = (text || "").trim();
-        if (!text || busy) return;
+        const img = pendingImage;
+        // allow sending with just an image (no text) — use a default ask
+        if ((!text && !img) || busy) return;
+        if (!text && img) text = "Analyse this screenshot and tell me: should I trade now? Give the verdict.";
         busy = true; sendBtn.disabled = true;
 
-        addBubble("user", text);
+        addBubble("user", text, img);
         history.push({ role: "user", content: text });
         input.value = "";
         input.style.height = "auto";
+        clearImage();
         addTyping();
 
         try {
             const headers = { "Content-Type": "application/json" };
             const tok = getToken();
             if (tok) headers["x-chat-token"] = tok;
+            const payload = { messages: history };
+            if (img) payload.image = img;  // data URL; function parses it
 
             let resp = await fetch(ENDPOINT, {
-                method: "POST",
-                headers,
-                body: JSON.stringify({ messages: history }),
+                method: "POST", headers, body: JSON.stringify(payload),
             });
 
             // If the server enforces a PIN and we don't have a valid one, ask once.
@@ -104,7 +168,7 @@
                     resp = await fetch(ENDPOINT, {
                         method: "POST",
                         headers: { "Content-Type": "application/json", "x-chat-token": t },
-                        body: JSON.stringify({ messages: history }),
+                        body: JSON.stringify(payload),
                     });
                 }
             }
