@@ -61,6 +61,8 @@ function roundStrike(spot, step) {
 function sigOf(row) {
   const raw = row?.raw_payload || {};
   const sig = raw.signal || {};
+  const oc = raw.option_chain || {};
+  const sp = raw.spot || {};
   return {
     signal: sig.signal || "NEUTRAL",
     confidence: Number(sig.confidence || 0),
@@ -69,9 +71,35 @@ function sigOf(row) {
     reasoning: sig.ai_reasoning || "",
     target1: Number(sig.target1 || 0),
     stop_loss: Number(sig.stop_loss || 0),
-    spot: Number(row.spot_price || raw?.spot?.price || 0),
+    spot: Number(row.spot_price || sp.price || 0),
     ts: row.ts,
+    // support/resistance inputs (available even when signal is WAIT)
+    dayHigh: Number(sp.high || row.spot_high || 0),
+    dayLow: Number(sp.low || row.spot_low || 0),
+    prevClose: Number(sp.prev_close || 0),
+    dayOpen: Number(sp.open || 0),
+    maxPain: Number(oc.max_pain || 0),
+    callWall: Number(oc.max_ce_oi_strike || 0),   // resistance (highest CE OI)
+    putWall: Number(oc.max_pe_oi_strike || 0),    // support (highest PE OI)
+    pcr: Number(oc.pcr_total || 0),
   };
+}
+
+// Organise raw levels into support (below spot) / resistance (above spot).
+function keyLevels(s) {
+  const spot = s.spot;
+  const cand = [
+    ["call-wall (OI)", s.callWall],
+    ["put-wall (OI)", s.putWall],
+    ["max-pain", s.maxPain],
+    ["day-high", s.dayHigh],
+    ["day-low", s.dayLow],
+    ["prev-close", s.prevClose],
+    ["day-open", s.dayOpen],
+  ].filter(([, v]) => v > 0);
+  const res = cand.filter(([, v]) => v > spot).sort((a, b) => a[1] - b[1]);
+  const sup = cand.filter(([, v]) => v < spot).sort((a, b) => b[1] - a[1]);
+  return { res, sup };
 }
 
 // Deterministic trade plan — computed in code so the LLM never does the math.
@@ -123,12 +151,23 @@ WHAT THE TIERS MEAN:
 - TIER_2 / YELLOW = watch only — bias present but not high conviction.
 - WAIT / TIER_3   = stand aside, no clean setup.
 
+ALWAYS state the confidence % when discussing any symbol's signal.
+
 HOW TO ANSWER:
-- "trend?" -> state direction (CALL=bullish, PUT=bearish, WAIT=no trade), the regime (TRENDING/CHOPPY), and a one-line read of recent behaviour.
-- "entry / exit / SL?" -> give the precomputed TRADE PLAN for that symbol: option (strike+CE/PE), entry zone, don't-chase line, target (spot + approx Rs), stop (spot + approx Rs), confidence.
-- If the engine is on WAIT for that symbol -> say clearly "No trade right now — engine is WAIT." Then give the directional bias if any and the nearest level to watch. Do NOT fabricate an entry.
-- "status today?" -> summarise per symbol: net move, current signal, count of TIER_1 today.
-- If asked about history/performance beyond today: say that's not wired up yet (coming soon) — you only have today's data.`;
+- "support / resistance / levels?" -> ALWAYS answer using the Resistance/Support lines in the context. List the key resistance levels (above spot) and support levels (below spot) with what each is (call-wall, max-pain, day-high, etc.). These exist regardless of whether there's a trade signal — NEVER refuse to give levels.
+- "trend?" -> state direction (CALL=bullish, PUT=bearish, WAIT=no clean trade), regime, confidence %, and a one-line read.
+- "entry / exit / SL?" ->
+    * If there's a TRADE PLAN in context: give it — option (strike+CE/PE), entry zone, don't-chase line, target (spot + approx Rs), stop (spot + approx Rs), and confidence %.
+    * If the engine is on WAIT: do NOT just refuse. Instead give a CONDITIONAL plan using the levels:
+        - State current bias + confidence %.
+        - Resistance to watch (nearest above) and support (nearest below).
+        - Conditional entry: "If price breaks ABOVE [resistance] with momentum -> CALL setup; if it breaks BELOW [support] -> PUT setup."
+        - Suggested exit: the next level in that direction; stop: just beyond the broken level.
+        - Make clear these are levels to WATCH, not a live signal — wait for the break + the engine to confirm (TIER_1/GREEN) before committing real size.
+- "status today?" -> per symbol: net move, current signal + confidence %, TIER_1 count.
+- History/performance beyond today: not wired up yet (coming soon) — you only have today's data.
+
+NEVER fabricate numbers. Use only the levels and values in the context. But DO always give the support/resistance levels and a conditional plan — that is exactly what the user wants when the engine is on WAIT.`;
 
 function buildContext(latest, plans, todaySummary) {
   const lines = [];
@@ -139,11 +178,16 @@ function buildContext(latest, plans, todaySummary) {
     if (!s) { lines.push(`${sym}: no data today`); continue; }
     const sm = todaySummary[sym] || {};
     lines.push(`=== ${sym} ===`);
-    lines.push(`  Current: ${s.signal} ${s.confidence}% | tier ${s.tier} | regime ${s.regime} | spot ${Math.round(s.spot)} (as of ${istClock(s.ts)})`);
+    lines.push(`  Current: ${s.signal} ${s.confidence}% conf | tier ${s.tier} | regime ${s.regime} | spot ${Math.round(s.spot)} (as of ${istClock(s.ts)})`);
     if (sm.open != null) {
       const mv = Math.round(s.spot - sm.open);
       lines.push(`  Day: open ${Math.round(sm.open)} -> now ${Math.round(s.spot)} (${mv >= 0 ? "+" : ""}${mv} pts) | TIER_1 signals today: ${sm.tier1 || 0}`);
     }
+    // Support/resistance — always available, even on WAIT
+    const { res, sup } = keyLevels(s);
+    if (res.length) lines.push(`  Resistance (above): ${res.map(([n, v]) => `${Math.round(v)} ${n}`).join(", ")}`);
+    if (sup.length) lines.push(`  Support (below):    ${sup.map(([n, v]) => `${Math.round(v)} ${n}`).join(", ")}`);
+    if (s.pcr) lines.push(`  PCR: ${s.pcr} (${s.pcr > 1 ? "put-heavy / supportive" : "call-heavy / capped"})`);
     if (s.reasoning) lines.push(`  Engine reasoning: ${s.reasoning}`);
     const p = plans[sym];
     if (p) {
