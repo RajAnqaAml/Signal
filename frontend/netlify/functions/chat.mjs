@@ -19,7 +19,25 @@
  * a 0.5 ATM delta — real per-strike premium is a v2 upgrade (needs recorder change).
  */
 
-import { GoogleGenAI } from "@google/genai";
+// Gemini via raw REST — avoids the @google/genai SDK, which returns 401 on
+// Netlify's runtime even with a valid key (raw REST with the same key works).
+async function callGemini(apiKey, model, contents) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents,
+      generationConfig: { temperature: 0.3, maxOutputTokens: 800, thinkingConfig: { thinkingBudget: 0 } },
+    }),
+  });
+  const text = await r.text();
+  if (!r.ok) { const e = new Error(`gemini ${r.status}: ${text.slice(0, 200)}`); e.status = r.status; throw e; }
+  const data = JSON.parse(text);
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  return parts.map(p => p.text || "").join("").trim();
+}
 
 // Minimal Supabase REST (PostgREST) reader — avoids the supabase-js SDK and its
 // realtime/WebSocket dependency (which breaks on Node < 22). We only do SELECTs.
@@ -288,36 +306,6 @@ export default async (req) => {
   let body;
   try { body = await req.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
 
-  // ── debug: raw Gemini REST call to see the REAL error (SDK hides it) ───────
-  if (body.debug === "gemtest") {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-    try {
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts: [{ text: "Say OK" }] }] }),
-      });
-      const text = await r.text();
-      return Response.json({ status: r.status, body: text.slice(0, 600) });
-    } catch (e) {
-      return Response.json({ fetchError: String(e?.message || e) });
-    }
-  }
-
-  // ── debug: inspect what key the runtime actually received (masked) ─────────
-  if (body.debug === "key") {
-    const k = apiKey || "";
-    return Response.json({
-      present: !!k,
-      length: k.length,
-      starts: k.slice(0, 6),
-      ends: k.slice(-4),
-      hasWhitespace: /\s/.test(k),
-      hasQuotes: /["']/.test(k),
-      expectedLength: 39,  // a normal Google API key is 39 chars
-    });
-  }
-
   const messages = Array.isArray(body.messages) ? body.messages.slice(-12) : [];
   if (!messages.length) return Response.json({ error: "no messages" }, { status: 400 });
 
@@ -365,8 +353,7 @@ export default async (req) => {
     if (chunks.length) context += "\n\n" + chunks.join("\n\n");
   }
 
-  // ── Gemini ───────────────────────────────────────────────────────────────
-  const ai = new GoogleGenAI({ apiKey });
+  // ── Gemini via raw REST (the @google/genai SDK 401s on Netlify) ────────────
   const contents = messages.map(m => ({
     role: m.role === "assistant" ? "model" : "user",
     parts: [{ text: String(m.content || "") }],
@@ -378,17 +365,7 @@ export default async (req) => {
   let reply = null, lastErr = null;
   for (const model of MODELS) {
     try {
-      const resp = await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          systemInstruction: SYSTEM_PROMPT,
-          temperature: 0.3,
-          maxOutputTokens: 800,
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      });
-      reply = (resp.text || "").trim();
+      reply = await callGemini(apiKey, model, contents);
       if (reply) break;
     } catch (e) {
       lastErr = e;
