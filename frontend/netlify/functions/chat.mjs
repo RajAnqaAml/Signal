@@ -287,6 +287,21 @@ export default async (req) => {
 
   let body;
   try { body = await req.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
+
+  // ── debug: inspect what key the runtime actually received (masked) ─────────
+  if (body.debug === "key") {
+    const k = apiKey || "";
+    return Response.json({
+      present: !!k,
+      length: k.length,
+      starts: k.slice(0, 6),
+      ends: k.slice(-4),
+      hasWhitespace: /\s/.test(k),
+      hasQuotes: /["']/.test(k),
+      expectedLength: 39,  // a normal Google API key is 39 chars
+    });
+  }
+
   const messages = Array.isArray(body.messages) ? body.messages.slice(-12) : [];
   if (!messages.length) return Response.json({ error: "no messages" }, { status: 400 });
 
