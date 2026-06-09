@@ -40,6 +40,7 @@ _MODELS = [
 ]
 _MODEL  = _MODELS[0]   # current working model (updated at runtime on 404)
 _client = None
+_LAST_ERROR = ""       # last generate_signal failure reason (for health alerts)
 
 # In-process news cache (fastest — reused within one --once run)
 _news_cache: dict = {}
@@ -591,6 +592,17 @@ def generate_signal(
 
     except Exception as e:
         import traceback as tb
+        global _LAST_ERROR
+        msg = str(e)
+        # Make common failures human-readable for the health alert
+        if "RESOURCE_EXHAUSTED" in msg or "credits are depleted" in msg or "429" in msg:
+            _LAST_ERROR = "Gemini API: credits/quota depleted (429). Top up or rotate key at ai.studio."
+        elif "API key not valid" in msg or "401" in msg:
+            _LAST_ERROR = "Gemini API: invalid key (401). Check GOOGLE_API_KEY."
+        elif "404" in msg or "NOT_FOUND" in msg:
+            _LAST_ERROR = "Gemini API: model not found (404). Model may be deprecated."
+        else:
+            _LAST_ERROR = f"Gemini error: {msg[:120]}"
         print(f"[ai_engine] ERROR for {symbol}: {e}", flush=True)
         tb.print_exc()
         return _wait

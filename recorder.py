@@ -418,12 +418,19 @@ def take_one(now, force=False):
                     if (r.get("raw_payload") or {}).get("signal",{}).get("confidence",1) == 0
                 )
                 if neutral_streak >= 3 and _notify and _notify.is_configured():
+                    # Include the actual failure reason so the alert is actionable
+                    reason = ""
+                    try:
+                        import ai_engine as _ai
+                        reason = getattr(_ai, "_LAST_ERROR", "") or ""
+                    except Exception:
+                        pass
+                    detail = reason or "Check GH Actions logs (Gemini key / model / quota)."
                     _notify.send_info(
                         "ENGINE BROKEN",
-                        f"AI engine returning NEUTRAL for 3+ consecutive runs. "
-                        f"Check GH Actions logs — likely Gemini model deprecated or API key issue."
+                        f"AI returning NEUTRAL for 3+ runs.\nReason: {detail}"
                     )
-                    print("[health] ALERT sent: engine broken (3+ NEUTRAL runs)", flush=True)
+                    print(f"[health] ALERT sent: engine broken — {detail}", flush=True)
         except Exception:
             pass
 
