@@ -129,7 +129,8 @@ def send_signal_alert(symbol: str, signal_row: dict) -> bool:
 
     # Title — fits on phone lock-screen (~50 chars)
     icon = "[PUT]" if direction == "PUT" else "[CALL]"
-    title = f"{icon} {symbol}: BUY {option}"
+    expiry_tag = " EXPIRY!" if signal_row.get("is_expiry") else ""
+    title = f"{icon} {symbol}: BUY {option}{expiry_tag}"
 
     # Body — compact, scannable. NOTE: removed "exit in 10 min" line because
     # engine signals routinely sustain conviction for HOURS (Mon BN ran 5+ hrs).

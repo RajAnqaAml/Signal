@@ -366,7 +366,8 @@ Today's events & news: {news_context}
 
 === TRADE CONSTRAINTS ===
 Target: Rs 1,000-1,500 profit (1 lot) | Stop-loss: Rs 500 | Max hold: 2 hours
-Avoid: market open first 15 min (before 9:30), last 30 min (after 15:00), expiry day (DTE=0)
+Avoid: market open first 15 min (before 9:30), last 30 min (after 15:00).
+On expiry day (DTE=0): trading IS allowed (incl. TIER_1) but moves are fast — favour tight stops.
 
 === YOUR ANALYSIS FRAMEWORK ===
 Think through these silently before deciding:
@@ -406,9 +407,10 @@ Output ONLY valid JSON. No markdown fences, no explanation outside JSON:
 }}
 
 push_tier rules (be strict — protect capital):
-TIER_1: confidence >= 85 AND regime=TRENDING AND signal != WAIT AND DTE >= 1 AND no blocking event
+TIER_1: confidence >= 85 AND regime=TRENDING AND signal != WAIT AND no blocking event
+        (DTE=0 expiry day is ALLOWED for TIER_1, but moves are fast — keep stops tight)
 TIER_2: confidence 65-84 OR regime=CHOPPY (informational — dashboard only, do not notify phone)
-TIER_3: confidence < 65 OR signal=WAIT OR DTE=0 OR major event in next 2 hrs
+TIER_3: confidence < 65 OR signal=WAIT OR major event in next 2 hrs
 """.strip()
 
 
@@ -581,6 +583,7 @@ def generate_signal(
             symbol, result["signal"], spot,
             result["target1"], result["target2"], result["stop_loss"], oc_analysis,
         )
+        result["is_expiry"] = (dte == 0)   # flag for expiry-day warning in alerts
 
         print(
             f"[ai_engine] {symbol} -> {result['signal']} "
@@ -654,10 +657,11 @@ def _parse_ai_response(raw: str, spot: float, symbol: str, atr: float, dte: int,
     t1_pts = int(max(atr_ref * 0.5, min(atr_ref * 4, obj.get("target_pts", atr_ref) or atr_ref)))
     sl_pts = int(max(atr_ref * 0.3, min(t1_pts * 0.8, obj.get("sl_pts", int(t1_pts * 0.55)) or int(t1_pts * 0.55))))
 
-    # push_tier override: safety rules that override AI's suggestion
+    # push_tier override: safety rules that override AI's suggestion.
+    # NOTE: expiry day (DTE=0) is NO LONGER forced to TIER_3 — TIER_1 is allowed
+    # on expiry (per user). Expiry moves are fast: notifications flag it + keep
+    # stops tight. The standard 85%+TRENDING bar still applies.
     tier = str(obj.get("push_tier", "TIER_3")).upper()
-    if dte == 0:
-        tier = "TIER_3"               # expiry day — never TIER_1
     if sig == "WAIT" or conf < 50:
         tier = "TIER_3"
     if tier not in ("TIER_1", "TIER_2", "TIER_3"):
