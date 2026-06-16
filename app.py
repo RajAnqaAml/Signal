@@ -1521,6 +1521,13 @@ def compute_cpr(symbol: str, now_ist: datetime) -> dict | None:
     tc        = 2 * pivot - bc          # symmetric around pivot
     width_pct = abs(tc - bc) / pivot * 100
 
+    # Standard floor pivots (intraday S/R)
+    rng = prev_high - prev_low
+    r1  = 2 * pivot - prev_low
+    s1  = 2 * pivot - prev_high
+    r2  = pivot + rng
+    s2  = pivot - rng
+
     if width_pct < 0.25:
         width_label = "NARROW"
         day_type    = "Strong TRENDING day expected - high conviction moves likely"
@@ -1535,6 +1542,10 @@ def compute_cpr(symbol: str, now_ist: datetime) -> dict | None:
         "pivot":      round(pivot,     1),
         "tc":         round(tc,        1),
         "bc":         round(bc,        1),
+        "r1":         round(r1, 1),
+        "r2":         round(r2, 1),
+        "s1":         round(s1, 1),
+        "s2":         round(s2, 1),
         "width_pct":  round(width_pct, 3),
         "width_label":width_label,
         "day_type":   day_type,

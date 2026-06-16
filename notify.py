@@ -189,6 +189,17 @@ def send_signal_alert(symbol: str, signal_row: dict) -> bool:
         for r in keep:
             body.append(f"  - {r}")
 
+    # Pivot-based intraday levels (Pivot / R1 / R2 / S1 / S2)
+    pv = signal_row.get("pivots") or {}
+    if pv.get("pivot"):
+        body += [
+            "",
+            "Levels (pivot):",
+            f"  Pivot: {pv['pivot']:.0f}",
+            f"  R1: {pv['r1']:.0f}   R2: {pv['r2']:.0f}",
+            f"  S1: {pv['s1']:.0f}   S2: {pv['s2']:.0f}",
+        ]
+
     # AI Filter verdict (attached by recorder.py if Gemini filter ran)
     ai_verdict  = signal_row.get("ai_verdict")
     ai_risk     = signal_row.get("ai_risk", "")

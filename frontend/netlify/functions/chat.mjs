@@ -150,11 +150,13 @@ async function fetchChartLevels(baseUrl, key, symbol) {
 function formatChartLevels(symbol, cl) {
   const R = Math.round;
   const L = [];
-  L.push(`=== ${symbol} CHART LEVELS (from previous daily candles; prev day ${cl.prevDate} H/L/C ${R(cl.prevH)}/${R(cl.prevL)}/${R(cl.prevC)}) ===`);
-  L.push(`  CPR: pivot ${R(cl.cpr.pivot)} | TC ${R(cl.cpr.tc)} | BC ${R(cl.cpr.bc)}`);
-  L.push(`  Floor pivots — Resistance: R1 ${R(cl.piv.R1)}, R2 ${R(cl.piv.R2)}, R3 ${R(cl.piv.R3)}`);
-  L.push(`                 Support:    S1 ${R(cl.piv.S1)}, S2 ${R(cl.piv.S2)}, S3 ${R(cl.piv.S3)}  (PP ${R(cl.piv.PP)})`);
-  L.push(`  Multi-day range: 5-day ${R(cl.r5.lo)}–${R(cl.r5.hi)} | 10-day ${R(cl.r10.lo)}–${R(cl.r10.hi)}`);
+  L.push(`=== ${symbol} PIVOT-BASED INTRADAY LEVELS (from prev day ${cl.prevDate} H/L/C ${R(cl.prevH)}/${R(cl.prevL)}/${R(cl.prevC)}) ===`);
+  L.push(`  Pivot: ${R(cl.piv.PP)}`);
+  L.push(`  Resistance 1: ${R(cl.piv.R1)}`);
+  L.push(`  Resistance 2: ${R(cl.piv.R2)}`);
+  L.push(`  Support 1: ${R(cl.piv.S1)}`);
+  L.push(`  Support 2: ${R(cl.piv.S2)}`);
+  L.push(`  (extra: R3 ${R(cl.piv.R3)}, S3 ${R(cl.piv.S3)}; CPR TC ${R(cl.cpr.tc)} / BC ${R(cl.cpr.bc)}; 5-day ${R(cl.r5.lo)}-${R(cl.r5.hi)}, 10-day ${R(cl.r10.lo)}-${R(cl.r10.hi)})`);
   return L.join("\n");
 }
 
@@ -249,6 +251,13 @@ HOW TO ANSWER:
     * INTRADAY (today): Resistance/Support lines — call-wall, put-wall, max-pain, day-high/low, prev-close.
     * CHART-BASED ("CHART LEVELS" block when present): CPR (pivot/TC/BC), floor pivots (R1-R3 / S1-S3 / PP), 5-day & 10-day range.
   If the user says "previous charts / pivot / CPR / based on charts", LEAD with the chart-based levels. Otherwise blend both. After the list, add a one-line read of where price sits relative to the key levels.
+  ALSO, whenever a "PIVOT-BASED INTRADAY LEVELS" block is present in context, ALWAYS include this exact 5-line summary near the top (these are the user's primary levels):
+      **Today's intraday levels (pivot-based):**
+      Pivot: <pivot>
+      Resistance 1: <r1>
+      Resistance 2: <r2>
+      Support 1: <s1>
+      Support 2: <s2>
 - "trend?" -> state direction (CALL=bullish, PUT=bearish, WAIT=no clean trade), regime, confidence %, and a one-line read.
 - "entry / exit / SL?" ->
     * If there's a TRADE PLAN in context: give it — option (strike+CE/PE), entry zone, don't-chase line, target (spot + approx Rs), stop (spot + approx Rs), and confidence %.

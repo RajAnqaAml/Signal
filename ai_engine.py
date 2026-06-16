@@ -585,6 +585,14 @@ def generate_signal(
         )
         result["is_expiry"] = (dte == 0)   # flag for expiry-day warning in alerts
 
+        # Pivot-based intraday levels (Pivot / R1 / R2 / S1 / S2) for alerts + dashboard
+        if cpr_data:
+            result["pivots"] = {
+                "pivot": cpr_data.get("pivot"),
+                "r1": cpr_data.get("r1"), "r2": cpr_data.get("r2"),
+                "s1": cpr_data.get("s1"), "s2": cpr_data.get("s2"),
+            }
+
         print(
             f"[ai_engine] {symbol} -> {result['signal']} "
             f"conf={result['confidence']:.0f}% tier={result['push_tier']} "
