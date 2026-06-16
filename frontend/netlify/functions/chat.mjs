@@ -101,6 +101,9 @@ function sigOf(row) {
     callWall: Number(oc.max_ce_oi_strike || 0),   // resistance (highest CE OI)
     putWall: Number(oc.max_pe_oi_strike || 0),    // support (highest PE OI)
     pcr: Number(oc.pcr_total || 0),
+    // Rs-priced ticket + pivot levels the engine already computed/stored
+    ticket: sig.premium_ticket || null,
+    pivots: sig.pivots || null,
   };
 }
 
@@ -260,7 +263,9 @@ HOW TO ANSWER:
       Support 2: <s2>
 - "trend?" -> state direction (CALL=bullish, PUT=bearish, WAIT=no clean trade), regime, confidence %, and a one-line read.
 - "entry / exit / SL?" ->
-    * If there's a TRADE PLAN in context: give it — option (strike+CE/PE), entry zone, don't-chase line, target (spot + approx Rs), stop (spot + approx Rs), and confidence %.
+    * PREFER the "TRADE PLAN (Rs premium — real LTP)" block when present: give Entry/Target1/Target2/Stop in RUPEE PREMIUM (e.g. Entry Rs 95, T1 Rs 108) with the per-lot Rs and R:R. These are the actual option prices — lead with them.
+    * Only if no premium ticket is stored, fall back to the spot-based plan (entry zone, target/stop in spot + approx Rs).
+    * Always include the option (strike+CE/PE) and confidence %. Include the PIVOTS line if present.
     * If the engine is on WAIT: do NOT just refuse. Instead give a CONDITIONAL plan using the levels:
         - State current bias + confidence %.
         - Resistance to watch (nearest above) and support (nearest below).
@@ -306,14 +311,33 @@ function buildContext(latest, plans, todaySummary) {
     if (sup.length) lines.push(`  Support (below):    ${sup.map(([n, v]) => `${Math.round(v)} ${n}`).join(", ")}`);
     if (s.pcr) lines.push(`  PCR: ${s.pcr} (${s.pcr > 1 ? "put-heavy / supportive" : "call-heavy / capped"})`);
     if (s.reasoning) lines.push(`  Engine reasoning: ${s.reasoning}`);
-    const p = plans[sym];
-    if (p) {
-      lines.push(`  TRADE PLAN: ${p.direction} ${p.option}`);
-      lines.push(`    Entry zone (spot): ${p.entry_zone}  | don't chase beyond spot ${p.dont_chase_beyond}`);
-      lines.push(`    Target: spot ${p.target_spot} (${p.target_pts} pts, approx +Rs ${p.target_inr_est}/lot of ${p.lot})`);
-      lines.push(`    Stop:   spot ${p.sl_spot} (${p.sl_pts} pts, approx -Rs ${p.sl_inr_est}/lot)`);
+
+    // Pivot-based intraday levels (engine-stored)
+    if (s.pivots && s.pivots.pivot) {
+      const pv = s.pivots;
+      lines.push(`  PIVOTS: Pivot ${Math.round(pv.pivot)} | R1 ${Math.round(pv.r1)} R2 ${Math.round(pv.r2)} | S1 ${Math.round(pv.s1)} S2 ${Math.round(pv.s2)}`);
+    }
+
+    // Trade plan — prefer the engine's Rs-priced premium ticket (real LTP);
+    // fall back to the spot-based estimate when no ticket is stored.
+    const tk = s.ticket;
+    if (tk && tk.entry_prem) {
+      lines.push(`  TRADE PLAN (Rs premium — real LTP): BUY ${tk.option}  (lot ${tk.lot})`);
+      lines.push(`    Entry:   Rs ${tk.entry_prem}`);
+      lines.push(`    Target1: Rs ${tk.t1_prem}  (+Rs ${tk.reward1_inr}/lot)`);
+      lines.push(`    Target2: Rs ${tk.t2_prem}  (+Rs ${tk.reward2_inr}/lot)`);
+      lines.push(`    Stop:    Rs ${tk.sl_prem}  (-Rs ${tk.risk_inr}/lot)`);
+      lines.push(`    R:R 1:${tk.rr}  (premium approx, delta ${tk.delta})`);
     } else {
-      lines.push(`  TRADE PLAN: none — engine is ${s.signal} (no actionable entry).`);
+      const p = plans[sym];
+      if (p) {
+        lines.push(`  TRADE PLAN (spot-based; no live premium stored): ${p.direction} ${p.option}`);
+        lines.push(`    Entry zone (spot): ${p.entry_zone}  | don't chase beyond spot ${p.dont_chase_beyond}`);
+        lines.push(`    Target: spot ${p.target_spot} (${p.target_pts} pts, approx +Rs ${p.target_inr_est}/lot of ${p.lot})`);
+        lines.push(`    Stop:   spot ${p.sl_spot} (${p.sl_pts} pts, approx -Rs ${p.sl_inr_est}/lot)`);
+      } else {
+        lines.push(`  TRADE PLAN: none — engine is ${s.signal} (no actionable entry).`);
+      }
     }
     lines.push("");
   }
